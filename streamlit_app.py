@@ -136,9 +136,7 @@ with st.sidebar:
         "⚽ Soccer Scanner",
         "💎 Arbitrage Scanner",
         "🏟️ Game Lines & Totals",
-        "🛒 Line Shopping",
         "📊 Alt-Line Sweeper",
-        "🔧 Boost Optimizer",
         "🌤️ Weather Check",
         "📋 Lineup Checker"
     ])
