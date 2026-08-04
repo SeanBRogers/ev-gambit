@@ -1051,34 +1051,145 @@ elif "Game Lines" in page:
                         # Best available odds for this game
                         if not game_odds_df.empty:
                             game_str = f"{away} @ {home}" if away and home else ''
-                            # Match by partial team name
                             game_match = game_odds_df[
                                 game_odds_df['game'].str.contains(home, case=False, na=False) |
                                 game_odds_df['game'].str.contains(hr.get('team_name', 'ZZZZZ'), case=False, na=False)
                             ]
                             if not game_match.empty:
                                 gm = game_match.iloc[0]
+                                game_label = gm.get('game', f'{away} @ {home}')
                                 st.write("**Best Available Lines:**")
-                                line_col1, line_col2, line_col3 = st.columns(3)
-                                with line_col1:
-                                    away_ml = gm.get('away_ml', 'N/A')
-                                    away_book = gm.get('away_ml_book', '')
-                                    if isinstance(away_ml, (int, float)):
-                                        st.metric(f"{gm.get('away_team', away)} ML", f"{away_ml:+.0f}", delta=away_book)
-                                with line_col2:
-                                    total = gm.get('total_line', '')
-                                    over_odds = gm.get('over_odds', '')
-                                    under_odds = gm.get('under_odds', '')
-                                    if total and isinstance(over_odds, (int, float)):
-                                        st.metric(f"O/U {total}", f"O {over_odds:+.0f} / U {under_odds:+.0f}" if isinstance(under_odds, (int, float)) else f"O {over_odds:+.0f}")
-                                        st.caption(f"O: {gm.get('over_book', '')} | U: {gm.get('under_book', '')}")
-                                with line_col3:
-                                    home_ml = gm.get('home_ml', 'N/A')
-                                    home_book = gm.get('home_ml_book', '')
-                                    if isinstance(home_ml, (int, float)):
-                                        st.metric(f"{gm.get('home_team', home)} ML", f"{home_ml:+.0f}", delta=home_book)
                                 
-                                # All books for MLs
+                                # Away ML
+                                away_ml = gm.get('away_ml', 'N/A')
+                                away_ml_book = gm.get('away_ml_book', '')
+                                if isinstance(away_ml, (int, float)):
+                                    c1, c2 = st.columns([5, 1])
+                                    with c1:
+                                        st.metric(f"{gm.get('away_team', away)} ML", f"{away_ml:+.0f}", delta=away_ml_book)
+                                    with c2:
+                                        if st.button("➕", key=f"slip_away_ml_{home}_{away}"):
+                                            add_to_slip({
+                                                'player': gm.get('away_team', away),
+                                                'prop_type': 'moneyline',
+                                                'direction': 'ml',
+                                                'line': '',
+                                                'best_odds': int(away_ml),
+                                                'best_book': away_ml_book,
+                                                'edge': 0,
+                                                'event': game_label,
+                                            })
+                                            st.rerun()
+                                
+                                # Home ML
+                                home_ml = gm.get('home_ml', 'N/A')
+                                home_ml_book = gm.get('home_ml_book', '')
+                                if isinstance(home_ml, (int, float)):
+                                    c1, c2 = st.columns([5, 1])
+                                    with c1:
+                                        st.metric(f"{gm.get('home_team', home)} ML", f"{home_ml:+.0f}", delta=home_ml_book)
+                                    with c2:
+                                        if st.button("➕", key=f"slip_home_ml_{home}_{away}"):
+                                            add_to_slip({
+                                                'player': gm.get('home_team', home),
+                                                'prop_type': 'moneyline',
+                                                'direction': 'ml',
+                                                'line': '',
+                                                'best_odds': int(home_ml),
+                                                'best_book': home_ml_book,
+                                                'edge': 0,
+                                                'event': game_label,
+                                            })
+                                            st.rerun()
+                                
+                                # Over
+                                total = gm.get('total_line', '')
+                                over_odds = gm.get('over_odds', '')
+                                over_book = gm.get('over_book', '')
+                                if total and isinstance(over_odds, (int, float)):
+                                    c1, c2 = st.columns([5, 1])
+                                    with c1:
+                                        st.metric(f"Over {total}", f"{over_odds:+.0f}", delta=over_book)
+                                    with c2:
+                                        if st.button("➕", key=f"slip_over_{home}_{away}"):
+                                            add_to_slip({
+                                                'player': game_label,
+                                                'prop_type': 'game_total',
+                                                'direction': 'over',
+                                                'line': total,
+                                                'best_odds': int(over_odds),
+                                                'best_book': over_book,
+                                                'edge': 0,
+                                                'event': game_label,
+                                            })
+                                            st.rerun()
+                                
+                                # Under
+                                under_odds = gm.get('under_odds', '')
+                                under_book = gm.get('under_book', '')
+                                if total and isinstance(under_odds, (int, float)):
+                                    c1, c2 = st.columns([5, 1])
+                                    with c1:
+                                        st.metric(f"Under {total}", f"{under_odds:+.0f}", delta=under_book)
+                                    with c2:
+                                        if st.button("➕", key=f"slip_under_{home}_{away}"):
+                                            add_to_slip({
+                                                'player': game_label,
+                                                'prop_type': 'game_total',
+                                                'direction': 'under',
+                                                'line': total,
+                                                'best_odds': int(under_odds),
+                                                'best_book': under_book,
+                                                'edge': 0,
+                                                'event': game_label,
+                                            })
+                                            st.rerun()
+                                
+                                # Spread
+                                home_sp = gm.get('home_spread', '')
+                                home_sp_odds = gm.get('home_spread_odds', '')
+                                home_sp_book = gm.get('home_spread_book', '')
+                                away_sp = gm.get('away_spread', '')
+                                away_sp_odds = gm.get('away_spread_odds', '')
+                                away_sp_book = gm.get('away_spread_book', '')
+                                
+                                if away_sp and isinstance(away_sp_odds, (int, float)):
+                                    c1, c2 = st.columns([5, 1])
+                                    with c1:
+                                        st.metric(f"{gm.get('away_team', away)} {away_sp:+.1f}", f"{away_sp_odds:+.0f}", delta=away_sp_book)
+                                    with c2:
+                                        if st.button("➕", key=f"slip_away_sp_{home}_{away}"):
+                                            add_to_slip({
+                                                'player': gm.get('away_team', away),
+                                                'prop_type': 'spread',
+                                                'direction': f"{away_sp:+.1f}",
+                                                'line': away_sp,
+                                                'best_odds': int(away_sp_odds),
+                                                'best_book': away_sp_book,
+                                                'edge': 0,
+                                                'event': game_label,
+                                            })
+                                            st.rerun()
+                                
+                                if home_sp and isinstance(home_sp_odds, (int, float)):
+                                    c1, c2 = st.columns([5, 1])
+                                    with c1:
+                                        st.metric(f"{gm.get('home_team', home)} {home_sp:+.1f}", f"{home_sp_odds:+.0f}", delta=home_sp_book)
+                                    with c2:
+                                        if st.button("➕", key=f"slip_home_sp_{home}_{away}"):
+                                            add_to_slip({
+                                                'player': gm.get('home_team', home),
+                                                'prop_type': 'spread',
+                                                'direction': f"{home_sp:+.1f}",
+                                                'line': home_sp,
+                                                'best_odds': int(home_sp_odds),
+                                                'best_book': home_sp_book,
+                                                'edge': 0,
+                                                'event': game_label,
+                                            })
+                                            st.rerun()
+                                
+                                # All books
                                 away_all = gm.get('away_ml_all', '')
                                 home_all = gm.get('home_ml_all', '')
                                 if away_all:
