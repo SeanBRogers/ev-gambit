@@ -127,7 +127,9 @@ with st.sidebar:
         "🎯 Daily K Scanner",
         "⚡ Full Prop Scanner",
         "🏀 NBA/WNBA Scanner",
-        "🏈 NFL Scanner",
+        "🏈 NFL/NCAA Scanner",
+        "🏒 NHL Scanner",
+        "⚽ Soccer Scanner",
         "💎 Arbitrage Scanner",
         "🛒 Line Shopping",
         "🔍 Single Prop Analysis",
@@ -479,8 +481,11 @@ elif "NBA/WNBA" in page:
 # PAGE: NFL SCANNER
 # ============================================================
 
-elif "NFL" in page:
-    st.title("🏈 NFL Prop Scanner")
+elif "NFL/NCAA" in page:
+    st.title("🏈 NFL / NCAA Football Prop Scanner")
+    
+    league_choice = st.radio("League", ["NFL", "NCAAF"], horizontal=True)
+    sport_key = league_choice.lower()
     
     if not api_key:
         st.error("Odds API key required.")
@@ -506,7 +511,7 @@ elif "NFL" in page:
         
         if st.button("📊 Analyze Player", type="primary", key="nfl_analyze"):
             with st.spinner(f"Looking up {nfl_player}..."):
-                result = evaluate_any_sport_prop(nfl_player, 'nfl', nfl_prop, nfl_line, nfl_odds, nfl_dir)
+                result = evaluate_any_sport_prop(nfl_player, sport_key, nfl_prop, nfl_line, nfl_odds, nfl_dir)
             
             if result and 'error' not in result:
                 col1, col2, col3, col4 = st.columns(4)
@@ -525,12 +530,12 @@ elif "NFL" in page:
         
         # Full scan
         st.divider()
-        st.subheader("⚡ Full NFL Scan")
+        st.subheader(f"⚡ Full {league_choice} Scan")
         st.caption("Best during regular season (September - January)")
         
-        if st.button("⚡ SCAN ALL NFL PROPS", type="primary", use_container_width=True):
-            with st.spinner("Scanning NFL props..."):
-                results_df = scan_sport_props(api_key, 'nfl')
+        if st.button(f"⚡ SCAN ALL {league_choice} PROPS", type="primary", use_container_width=True):
+            with st.spinner(f"Scanning {league_choice} props..."):
+                results_df = scan_sport_props(api_key, sport_key)
             
             if not results_df.empty:
                 st.success(f"Evaluated {len(results_df)} props")
@@ -553,7 +558,68 @@ elif "NFL" in page:
                                 f"{play.get('line', '')} ({play.get('prop_type', '').replace('player_', '')}) | "
                                 f"Edge: {play.get('edge', 0):+.1%} | Confidence: {play.get('confidence', '').upper()}")
                 else:
-                    st.info("No high-confidence plays found. Check the full table.")
+                    st.info("No high-confidence plays found.")
+            else:
+                st.warning(f"No {league_choice} props found. Check if games are scheduled today.")
+
+
+# ============================================================
+# PAGE: NHL SCANNER
+# ============================================================
+
+elif "NHL" in page:
+    st.title("🏒 NHL Prop Scanner")
+    
+    if not api_key:
+        st.error("Odds API key required.")
+    else:
+        st.subheader("⚡ Full NHL Scan")
+        
+        if st.button("⚡ SCAN ALL NHL PROPS", type="primary", use_container_width=True):
+            with st.spinner("Scanning NHL props..."):
+                results_df = scan_sport_props(api_key, 'nhl')
+            
+            if not results_df.empty:
+                st.success(f"Evaluated {len(results_df)} props")
+                display_cols = [c for c in ['player', 'event', 'prop_type', 'direction',
+                               'line', 'odds', 'hit_rate', 'implied_prob', 'edge',
+                               'ev_per_dollar', 'confidence', 'verdict']
+                               if c in results_df.columns]
+                st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
+            else:
+                st.warning("No NHL props found. Check if season is active.")
+
+
+# ============================================================
+# PAGE: SOCCER SCANNER
+# ============================================================
+
+elif "Soccer" in page:
+    st.title("⚽ Soccer Prop Scanner")
+    
+    if not api_key:
+        st.error("Odds API key required.")
+    else:
+        soccer_league = st.selectbox("League", 
+            ['epl', 'la_liga', 'bundesliga', 'serie_a', 'ligue_1', 'mls', 'champions_league'],
+            format_func=lambda x: {'epl': 'Premier League', 'la_liga': 'La Liga', 
+                                   'bundesliga': 'Bundesliga', 'serie_a': 'Serie A',
+                                   'ligue_1': 'Ligue 1', 'mls': 'MLS',
+                                   'champions_league': 'Champions League'}.get(x, x))
+        
+        if st.button(f"⚡ SCAN ALL PROPS", type="primary", use_container_width=True, key="soccer_scan"):
+            with st.spinner(f"Scanning {soccer_league.upper()} props..."):
+                results_df = scan_sport_props(api_key, soccer_league)
+            
+            if not results_df.empty:
+                st.success(f"Evaluated {len(results_df)} props")
+                display_cols = [c for c in ['player', 'event', 'prop_type', 'direction',
+                               'line', 'odds', 'hit_rate', 'implied_prob', 'edge',
+                               'ev_per_dollar', 'confidence', 'verdict']
+                               if c in results_df.columns]
+                st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
+            else:
+                st.warning(f"No {soccer_league.upper()} props found. Check if games are scheduled today.")
 
 
 # ============================================================

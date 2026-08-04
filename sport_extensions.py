@@ -29,6 +29,14 @@ SPORT_KEYS = {
     'nfl': 'americanfootball_nfl',
     'ncaaf': 'americanfootball_ncaaf',
     'ncaab': 'basketball_ncaab',
+    'nhl': 'icehockey_nhl',
+    'mls': 'soccer_usa_mls',
+    'epl': 'soccer_epl',
+    'la_liga': 'soccer_spain_la_liga',
+    'bundesliga': 'soccer_germany_bundesliga',
+    'serie_a': 'soccer_italy_serie_a',
+    'ligue_1': 'soccer_france_ligue_one',
+    'champions_league': 'soccer_uefa_champs_league',
 }
 
 SPORT_MARKETS = {
@@ -36,6 +44,16 @@ SPORT_MARKETS = {
     'nba': 'player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists,player_steals,player_blocks',
     'wnba': 'player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists',
     'nfl': 'player_pass_yds,player_pass_tds,player_rush_yds,player_reception_yds,player_receptions,player_anytime_td',
+    'ncaaf': 'player_pass_yds,player_pass_tds,player_rush_yds,player_reception_yds,player_receptions,player_anytime_td',
+    'ncaab': 'player_points,player_rebounds,player_assists,player_threes',
+    'nhl': 'player_points,player_shots_on_goal,player_assists,player_blocked_shots,player_power_play_points,goalie_saves',
+    'mls': 'player_shots,player_shots_on_target,player_anytime_goalscorer',
+    'epl': 'player_shots,player_shots_on_target,player_anytime_goalscorer',
+    'la_liga': 'player_shots,player_shots_on_target,player_anytime_goalscorer',
+    'bundesliga': 'player_shots,player_shots_on_target,player_anytime_goalscorer',
+    'serie_a': 'player_shots,player_shots_on_target,player_anytime_goalscorer',
+    'ligue_1': 'player_shots,player_shots_on_target,player_anytime_goalscorer',
+    'champions_league': 'player_shots,player_shots_on_target,player_anytime_goalscorer',
 }
 
 def fetch_sport_props(api_key, sport='nba'):
@@ -420,6 +438,39 @@ def get_sport_prop_types(sport):
         'nfl': [
             'player_pass_yds', 'player_pass_tds', 'player_rush_yds',
             'player_reception_yds', 'player_receptions', 'player_anytime_td',
+        ],
+        'ncaaf': [
+            'player_pass_yds', 'player_pass_tds', 'player_rush_yds',
+            'player_reception_yds', 'player_receptions', 'player_anytime_td',
+        ],
+        'ncaab': [
+            'player_points', 'player_rebounds', 'player_assists',
+            'player_threes',
+        ],
+        'nhl': [
+            'player_points', 'player_shots_on_goal', 'player_assists',
+            'player_blocked_shots', 'player_power_play_points', 'goalie_saves',
+        ],
+        'mls': [
+            'player_shots', 'player_shots_on_target', 'player_anytime_goalscorer',
+        ],
+        'epl': [
+            'player_shots', 'player_shots_on_target', 'player_anytime_goalscorer',
+        ],
+        'la_liga': [
+            'player_shots', 'player_shots_on_target', 'player_anytime_goalscorer',
+        ],
+        'bundesliga': [
+            'player_shots', 'player_shots_on_target', 'player_anytime_goalscorer',
+        ],
+        'serie_a': [
+            'player_shots', 'player_shots_on_target', 'player_anytime_goalscorer',
+        ],
+        'ligue_1': [
+            'player_shots', 'player_shots_on_target', 'player_anytime_goalscorer',
+        ],
+        'champions_league': [
+            'player_shots', 'player_shots_on_target', 'player_anytime_goalscorer',
         ],
     }
     return types.get(sport, [])
