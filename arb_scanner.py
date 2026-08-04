@@ -207,7 +207,7 @@ def scan_arbs(api_key, sport='baseball_mlb', min_margin=0.0):
             result['over_book'] = best_over['book']
             result['under_book'] = best_under['book']
             arbs.append(result)
-        elif not result['arb_exists'] and result['margin'] > -2.0:
+        elif not result['arb_exists'] and result['margin'] < 2.0 and result['margin'] > 0:
             # Near-arb: margin < 2%, still useful for finding value
             result['player'] = player
             result['prop_type'] = prop_type
