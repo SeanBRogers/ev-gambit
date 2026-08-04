@@ -381,19 +381,25 @@ elif "Full Prop" in page:
                     ]
                     if not plays.empty:
                         st.subheader(f"🏆 Top Plays — {len(plays)} found (Edge > 3% + High/Moderate Confidence)")
-                        for _, play in plays.head(10).iterrows():
+                        for play_idx, play in plays.head(10).iterrows():
                             conf_icon = '🟢' if play.get('confidence') == 'high' else '🟡'
-                            st.write(f"{conf_icon} **{play.get('player', 'Unknown')}** — "
-                                    f"{play.get('direction', '').upper()} {play.get('line', '')} "
-                                    f"({play.get('prop_type', '')}) | "
-                                    f"Edge: {play.get('edge', 0):+.1%} | "
-                                    f"EV: ${play.get('ev_per_dollar', 0):+.3f} | "
-                                    f"**Bet @ {play.get('best_book', '').upper()} ({play.get('best_odds', 0):+d})** | "
-                                    f"Confidence: {play.get('confidence', '').upper()}")
-                            # Show all book prices
-                            all_bks = play.get('all_books', '')
-                            if all_bks:
-                                st.caption(f"    All books: {all_bks}")
+                            col_info, col_btn = st.columns([5, 1])
+                            with col_info:
+                                st.write(f"{conf_icon} **{play.get('player', 'Unknown')}** — "
+                                        f"{play.get('direction', '').upper()} {play.get('line', '')} "
+                                        f"({play.get('prop_type', '')}) | "
+                                        f"Edge: {play.get('edge', 0):+.1%} | "
+                                        f"EV: ${play.get('ev_per_dollar', 0):+.3f} | "
+                                        f"**Bet @ {play.get('best_book', '').upper()} ({play.get('best_odds', 0):+d})** | "
+                                        f"Confidence: {play.get('confidence', '').upper()}")
+                                all_bks = play.get('all_books', '')
+                                if all_bks:
+                                    st.caption(f"    All books: {all_bks}")
+                            with col_btn:
+                                if st.button("➕", key=f"add_slip_{play_idx}"):
+                                    added = add_to_slip(play.to_dict())
+                                    if added:
+                                        st.rerun()
                     else:
                         st.info("No high-confidence plays found. Check the full table for marginal edges.")
                 else:
@@ -1192,3 +1198,109 @@ elif "Lineup" in page:
 
 st.divider()
 st.caption("EV+ Gambit v2.2 | MLB • NBA • WNBA • NFL | Enumerate before you evaluate.")
+
+
+# ============================================================
+# BET SLIP (persistent sidebar widget)
+# ============================================================
+
+# Initialize bet slip in session state
+if 'bet_slip' not in st.session_state:
+    st.session_state.bet_slip = []
+
+def add_to_slip(play):
+    """Add a play to the bet slip."""
+    # Avoid duplicates
+    for existing in st.session_state.bet_slip:
+        if (existing.get('player') == play.get('player') and 
+            existing.get('prop_type') == play.get('prop_type') and
+            existing.get('line') == play.get('line')):
+            return False
+    st.session_state.bet_slip.append(play)
+    return True
+
+def remove_from_slip(index):
+    """Remove a play from the bet slip by index."""
+    if 0 <= index < len(st.session_state.bet_slip):
+        st.session_state.bet_slip.pop(index)
+
+def clear_slip():
+    """Clear the entire bet slip."""
+    st.session_state.bet_slip = []
+
+# Display bet slip in sidebar
+with st.sidebar:
+    st.divider()
+    st.subheader(f"🎫 Bet Slip ({len(st.session_state.bet_slip)})")
+    
+    if st.session_state.bet_slip:
+        total_implied = 1.0
+        slip_text_lines = []
+        
+        for i, play in enumerate(st.session_state.bet_slip):
+            player = play.get('player', 'Unknown')
+            direction = play.get('direction', '').upper()
+            line = play.get('line', '')
+            odds = play.get('best_odds', play.get('odds', 0))
+            book = play.get('best_book', play.get('book', ''))
+            prop_type = play.get('prop_type', '').replace('pitcher_', '').replace('batter_', '').replace('player_', '').replace('_', ' ')
+            edge = play.get('edge', 0)
+            
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"**{player}** {direction} {line} ({prop_type})")
+                st.caption(f"{odds:+d} @ {book} | Edge: {edge:+.1%}")
+            with col2:
+                if st.button("❌", key=f"remove_{i}"):
+                    remove_from_slip(i)
+                    st.rerun()
+            
+            # Track for parlay calc
+            imp = implied_probability(odds) if odds != 0 else 0.5
+            total_implied *= imp
+            slip_text_lines.append(f"{player} {direction} {line} ({prop_type}) | {odds:+d} @ {book}")
+        
+        # Parlay math
+        if len(st.session_state.bet_slip) >= 2:
+            from ev_gambit_v2 import parlay_odds as calc_parlay
+            odds_list = [p.get('best_odds', p.get('odds', -110)) for p in st.session_state.bet_slip]
+            parlay_info = calc_parlay(odds_list)
+            
+            st.divider()
+            st.metric("Parlay Odds", f"+{parlay_info['combined_american']}" if parlay_info['combined_american'] > 0 else str(parlay_info['combined_american']))
+            
+            stake = st.number_input("Stake $", value=25, step=5, key="slip_stake")
+            if parlay_info['combined_american'] > 0:
+                payout = stake * (1 + parlay_info['combined_american'] / 100)
+            else:
+                payout = stake * (1 + 100 / -parlay_info['combined_american'])
+            st.metric("Payout", f"${payout:.2f}")
+            
+            # Boost
+            slip_boost = st.number_input("Boost %", value=0, step=5, key="slip_boost")
+            if slip_boost > 0:
+                from ev_gambit_v2 import apply_boost
+                boosted = apply_boost(parlay_info['combined_american'], slip_boost)
+                st.metric("Boosted Odds", f"+{boosted['boosted_odds']}" if boosted['boosted_odds'] > 0 else str(boosted['boosted_odds']))
+                if boosted['boosted_odds'] > 0:
+                    boosted_payout = stake * (1 + boosted['boosted_odds'] / 100)
+                else:
+                    boosted_payout = stake * (1 + 100 / -boosted['boosted_odds'])
+                st.metric("Boosted Payout", f"${boosted_payout:.2f}")
+        
+        # Copy slip
+        slip_text = "\n".join(slip_text_lines)
+        st.text_area("📋 Copy Slip", slip_text, height=100, key="copy_slip")
+        
+        # Group by book
+        books_used = set()
+        for p in st.session_state.bet_slip:
+            books_used.add(p.get('best_book', p.get('book', 'unknown')))
+        if len(books_used) > 1:
+            st.warning(f"⚠️ Legs span {len(books_used)} books: {', '.join(books_used)}")
+        
+        if st.button("🗑️ Clear Slip", use_container_width=True):
+            clear_slip()
+            st.rerun()
+    else:
+        st.caption("Add plays from any scanner page")
