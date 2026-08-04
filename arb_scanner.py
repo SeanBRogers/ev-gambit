@@ -37,24 +37,29 @@ def find_arb(over_odds, under_odds):
     if total_implied < 1.0:
         margin = 1.0 - total_implied
         
-        # Optimal stake allocation for $100 total
-        # Stake proportional to inverse of implied probability
-        total_stake = 100
-        over_stake = round(total_stake * (1 / over_imp) / (1 / over_imp + 1 / under_imp), 2)
-        under_stake = round(total_stake - over_stake, 2)
-        
-        # Calculate payouts
+        # Convert to decimal odds for stake calculation
         if over_odds > 0:
-            over_payout = over_stake * (1 + over_odds / 100)
+            over_decimal = 1 + over_odds / 100
         else:
-            over_payout = over_stake * (1 + 100 / -over_odds)
+            over_decimal = 1 + 100 / -over_odds
         
         if under_odds > 0:
-            under_payout = under_stake * (1 + under_odds / 100)
+            under_decimal = 1 + under_odds / 100
         else:
-            under_payout = under_stake * (1 + 100 / -under_odds)
+            under_decimal = 1 + 100 / -under_odds
         
-        guaranteed_profit = min(over_payout, under_payout) - total_stake
+        # Optimal stake: equalize payouts across both outcomes
+        # over_stake uses UNDER decimal in numerator (and vice versa)
+        # This ensures the lower-paying side gets more stake
+        total_stake = 100
+        over_stake = round(total_stake * under_decimal / (over_decimal + under_decimal), 2)
+        under_stake = round(total_stake - over_stake, 2)
+        
+        # Calculate payouts (includes original stake returned)
+        over_payout = round(over_stake * over_decimal, 2)
+        under_payout = round(under_stake * under_decimal, 2)
+        
+        guaranteed_profit = round(min(over_payout, under_payout) - total_stake, 2)
         roi = guaranteed_profit / total_stake * 100
         
         return {
