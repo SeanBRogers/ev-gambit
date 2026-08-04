@@ -1022,8 +1022,13 @@ elif "Game Lines" in page:
                         home_color = '#3fb950' if home_prob > 0.55 else '#d29922' if home_prob > 0.45 else '#f85149'
                         away_color = '#3fb950' if away_prob > 0.55 else '#d29922' if away_prob > 0.45 else '#f85149'
                         
-                        st.markdown(f"""
-                        <div class="play-card" style="border-left: 4px solid {home_color};">
+                        # Build reasons HTML
+                        reasons_html = ''
+                        for reason in wp.get('reasons', []):
+                            reasons_html += f'<div style="color:#8b949e; font-size:0.8em; padding:2px 0;">→ {reason}</div>'
+                        
+                        card_html = f"""
+                        <div class="play-card" style="border-left: 4px solid {home_color}; margin-bottom:16px;">
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                                 <div style="font-size:1.2em; font-weight:700; color:#f0f6fc;">
                                     {away} @ {home}
@@ -1035,47 +1040,39 @@ elif "Game Lines" in page:
                             
                             <div style="display:flex; justify-content:space-around; margin-bottom:12px;">
                                 <div style="text-align:center;">
-                                    <div style="color:#8b949e; font-size:0.8em;">Away</div>
+                                    <div style="color:#8b949e; font-size:0.8em;">{away}</div>
                                     <div style="color:{away_color}; font-weight:700; font-size:1.4em;">{away_prob:.0%}</div>
                                     <div style="color:#8b949e; font-size:0.8em;">{ar.get('wins', 0)}-{ar.get('losses', 0)}</div>
+                                    <div style="color:#8b949e; font-size:0.75em;">L10: {ar.get('last10_wins', '?')}-{ar.get('last10_losses', '?')} {ar.get('streak', '')}</div>
                                 </div>
                                 <div style="text-align:center;">
-                                    <div style="color:#8b949e; font-size:0.8em;">Projected Total</div>
+                                    <div style="color:#8b949e; font-size:0.8em;">Proj. Total</div>
                                     <div style="color:#388bfd; font-weight:700; font-size:1.4em;">{tp.get('projected_total', 'N/A')}</div>
-                                    <div style="color:#8b949e; font-size:0.8em;">{tp.get('away_runs_proj', '?')}-{tp.get('home_runs_proj', '?')}</div>
+                                    <div style="color:#8b949e; font-size:0.8em;">{tp.get('away_runs_proj', '?')} - {tp.get('home_runs_proj', '?')}</div>
                                 </div>
                                 <div style="text-align:center;">
-                                    <div style="color:#8b949e; font-size:0.8em;">Home</div>
+                                    <div style="color:#8b949e; font-size:0.8em;">{home}</div>
                                     <div style="color:{home_color}; font-weight:700; font-size:1.4em;">{home_prob:.0%}</div>
                                     <div style="color:#8b949e; font-size:0.8em;">{hr.get('wins', 0)}-{hr.get('losses', 0)}</div>
+                                    <div style="color:#8b949e; font-size:0.75em;">L10: {hr.get('last10_wins', '?')}-{hr.get('last10_losses', '?')} {hr.get('streak', '')}</div>
                                 </div>
                             </div>
                             
-                            <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #21262d;">
-                                <div>
-                                    <span style="color:#8b949e;">Pitching: </span>
-                                    <span style="color:#e6edf3;">{analysis.get('away_pitcher', 'TBD')} ({analysis.get('away_era', 'N/A')} ERA)</span>
-                                    <span style="color:#8b949e;"> vs </span>
-                                    <span style="color:#e6edf3;">{analysis.get('home_pitcher', 'TBD')} ({analysis.get('home_era', 'N/A')} ERA)</span>
-                                </div>
+                            <div style="padding:8px 0; border-top:1px solid #21262d;">
+                                <span style="color:#8b949e;">Pitching: </span>
+                                <span style="color:#e6edf3; font-weight:600;">{analysis.get('away_pitcher', 'TBD')}</span>
+                                <span style="color:#8b949e;"> ({analysis.get('away_era', 'N/A')} ERA) vs </span>
+                                <span style="color:#e6edf3; font-weight:600;">{analysis.get('home_pitcher', 'TBD')}</span>
+                                <span style="color:#8b949e;"> ({analysis.get('home_era', 'N/A')} ERA)</span>
                             </div>
                             
-                            <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap;">
-                                <span style="color:#8b949e; font-size:0.8em;">L10: {away} {ar.get('last10_wins', '?')}-{ar.get('last10_losses', '?')}</span>
-                                <span style="color:#8b949e; font-size:0.8em;">L10: {home} {hr.get('last10_wins', '?')}-{hr.get('last10_losses', '?')}</span>
-                                <span style="color:#8b949e; font-size:0.8em;">{hr.get('streak', '')} {home}</span>
-                                <span style="color:#8b949e; font-size:0.8em;">{ar.get('streak', '')} {away}</span>
+                            <div style="margin-top:8px; padding-top:8px; border-top:1px solid #21262d;">
+                                {reasons_html}
                             </div>
-                            
-                            <div style="margin-top:8px;">
-                        """, unsafe_allow_html=True)
+                        </div>
+                        """
                         
-                        # Show reasoning
-                        for reason in wp.get('reasons', []):
-                            st.caption(f"→ {reason}")
-                        
-                        st.markdown("</div></div>", unsafe_allow_html=True)
-                        st.write("")
+                        st.markdown(card_html, unsafe_allow_html=True)
             
             elif view_type == "Best Lines Summary":
                 with st.spinner(f"Loading {game_sport.upper()} game odds..."):
