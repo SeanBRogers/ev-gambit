@@ -129,7 +129,6 @@ with st.sidebar:
     
     # Navigation
     page = st.radio("📍 Navigation", [
-        "🎯 Daily K Scanner",
         "⚡ Full Prop Scanner",
         "🏀 NBA/WNBA Scanner",
         "🏈 NFL/NCAA Scanner",
@@ -138,9 +137,7 @@ with st.sidebar:
         "💎 Arbitrage Scanner",
         "🏟️ Game Lines & Totals",
         "🛒 Line Shopping",
-        "🔍 Single Prop Analysis",
         "📊 Alt-Line Sweeper",
-        "💰 Parlay Builder",
         "🔧 Boost Optimizer",
         "🌤️ Weather Check",
         "📋 Lineup Checker"
