@@ -306,15 +306,16 @@ elif "Full Prop" in page:
                 games = get_todays_games()
                 progress = st.progress(0, text="Evaluating props with best available odds...")
                 
-                # Group by player + prop type + line + direction, find best odds
-                best_odds = props_df.groupby(['player', 'prop_type', 'direction', 'line']).apply(
-                    lambda g: g.loc[g['odds'].idxmax()]
+                # Find best odds per prop: sort by odds descending, keep first per group
+                best_odds = props_df.sort_values('odds', ascending=False).drop_duplicates(
+                    subset=['player', 'prop_type', 'direction', 'line'], keep='first'
                 ).reset_index(drop=True)
                 
-                # Also build a lookup of all books for each prop
-                all_books = props_df.groupby(['player', 'prop_type', 'direction', 'line']).apply(
-                    lambda g: ', '.join([f"{r['book']}({r['odds']:+d})" for _, r in g.sort_values('odds', ascending=False).iterrows()])
-                ).reset_index(name='all_books_odds')
+                # Build lookup of all books for each prop
+                all_books_lookup = {}
+                for (player, prop_type, direction, line), group in props_df.groupby(['player', 'prop_type', 'direction', 'line']):
+                    books_str = ', '.join([f"{r['book']}({r['odds']:+d})" for _, r in group.sort_values('odds', ascending=False).iterrows()])
+                    all_books_lookup[(player, prop_type, direction, line)] = books_str
                 
                 total = len(best_odds)
                 
@@ -334,16 +335,8 @@ elif "Full Prop" in page:
                             result['best_odds'] = row['odds']
                             
                             # Attach all books pricing
-                            match = all_books[
-                                (all_books['player'] == row['player']) & 
-                                (all_books['prop_type'] == row['prop_type']) &
-                                (all_books['direction'] == row['direction']) &
-                                (all_books['line'] == row['line'])
-                            ]
-                            if not match.empty:
-                                result['all_books'] = match.iloc[0]['all_books_odds']
-                            else:
-                                result['all_books'] = row['book']
+                            key = (row['player'], row['prop_type'], row['direction'], row['line'])
+                            result['all_books'] = all_books_lookup.get(key, row['book'])
                             
                             results.append(result)
                     except:
