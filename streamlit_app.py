@@ -1,6 +1,6 @@
 """
-EV+ GAMBIT v2.1 — Streamlit Web App
-Full prop scanner: K, Hits, TB, HR, RBI, Runs, SB, NRFI/YRFI, Totals
+EV+ GAMBIT v2.2 — Streamlit Web App
+Multi-sport prop scanner: MLB, NBA, WNBA, NFL
 Hosted at: ev-gambit.streamlit.app
 """
 
@@ -28,6 +28,12 @@ from prop_extensions import (
     evaluate_er_prop, evaluate_outs_prop, evaluate_nrfi,
     evaluate_game_total, fetch_all_props, scan_all_props,
     evaluate_single_player_prop, get_all_prop_types, search_player_id
+)
+
+# Import multi-sport extensions
+from sport_extensions import (
+    fetch_sport_props, evaluate_any_sport_prop, get_sport_prop_types,
+    scan_sport_props, SPORT_KEYS, SPORT_MARKETS
 )
 
 # ============================================================
@@ -96,7 +102,7 @@ st.markdown("""
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/target.png", width=60)
     st.title("EV+ GAMBIT")
-    st.caption("v2.1 — Full Prop Analytics Engine")
+    st.caption("v2.2 — Multi-Sport Prop Engine")
     st.divider()
     
     # API Key — pull from secrets first, fallback to text input
@@ -115,6 +121,8 @@ with st.sidebar:
     page = st.radio("📍 Navigation", [
         "🎯 Daily K Scanner",
         "⚡ Full Prop Scanner",
+        "🏀 NBA/WNBA Scanner",
+        "🏈 NFL Scanner",
         "🔍 Single Prop Analysis",
         "📊 Alt-Line Sweeper",
         "💰 Parlay Builder",
@@ -348,23 +356,183 @@ elif "Full Prop" in page:
 
 
 # ============================================================
-# PAGE: SINGLE PROP ANALYSIS
+# PAGE: NBA/WNBA SCANNER
+# ============================================================
+
+elif "NBA/WNBA" in page:
+    st.title("🏀 NBA / WNBA Prop Scanner")
+    
+    league_choice = st.radio("League", ["WNBA", "NBA"], horizontal=True)
+    sport_key = league_choice.lower()
+    
+    if not api_key:
+        st.error("Odds API key required.")
+    else:
+        # Single player lookup
+        st.subheader("🔍 Single Player Prop")
+        col1, col2 = st.columns(2)
+        with col1:
+            bb_player = st.text_input("Player Name", placeholder="A'ja Wilson, Sabrina Ionescu...",
+                                      key="bb_player")
+        with col2:
+            bb_prop = st.selectbox("Prop Type", get_sport_prop_types(sport_key),
+                                   format_func=lambda x: x.replace('player_', '').replace('_', ' ').title(),
+                                   key="bb_prop")
+        
+        col3, col4, col5 = st.columns(3)
+        with col3:
+            bb_line = st.number_input("Line", value=20.5, step=0.5, key="bb_line")
+        with col4:
+            bb_odds = st.number_input("Odds", value=-110, step=5, key="bb_odds")
+        with col5:
+            bb_dir = st.selectbox("Direction", ["over", "under"], key="bb_dir")
+        
+        if st.button("📊 Analyze Player", type="primary"):
+            with st.spinner(f"Looking up {bb_player}..."):
+                result = evaluate_any_sport_prop(bb_player, sport_key, bb_prop, bb_line, bb_odds, bb_dir)
+            
+            if result and 'error' not in result:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("True Prob", f"{result.get('hit_rate', 0):.1%}")
+                with col2:
+                    st.metric("Implied Prob", f"{result.get('implied_prob', 0):.1%}")
+                with col3:
+                    edge = result.get('edge', 0)
+                    st.metric("Edge", f"{edge:+.1%}",
+                             delta='PLAY' if edge > 0.03 else 'FADE' if edge < 0 else 'MARGINAL')
+                with col4:
+                    st.metric("EV/$1", f"${result.get('ev_per_dollar', 0):+.3f}")
+            elif result:
+                st.error(result.get('error', 'Unknown error'))
+        
+        # Full scan
+        st.divider()
+        st.subheader(f"⚡ Full {league_choice} Scan")
+        
+        if st.button(f"⚡ SCAN ALL {league_choice} PROPS", type="primary", use_container_width=True):
+            with st.spinner(f"Scanning {league_choice} props..."):
+                results_df = scan_sport_props(api_key, sport_key)
+            
+            if not results_df.empty:
+                st.success(f"Evaluated {len(results_df)} props")
+                
+                display_cols = [c for c in ['player', 'event', 'prop_type', 'direction',
+                               'line', 'odds', 'hit_rate', 'implied_prob', 'edge',
+                               'ev_per_dollar', 'confidence', 'verdict']
+                               if c in results_df.columns]
+                st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
+                
+                plays = results_df[results_df['edge'] > 0.03]
+                if not plays.empty:
+                    st.subheader("🏆 Top Plays")
+                    for _, play in plays.head(10).iterrows():
+                        st.write(f"**{play.get('player', '')}** — {play.get('direction', '').upper()} "
+                                f"{play.get('line', '')} ({play.get('prop_type', '').replace('player_', '')}) | "
+                                f"Edge: {play.get('edge', 0):+.1%} | {play.get('verdict', '')}")
+            else:
+                st.warning(f"No {league_choice} props found. Season may be inactive or no games today.")
+
+
+# ============================================================
+# PAGE: NFL SCANNER
+# ============================================================
+
+elif "NFL" in page:
+    st.title("🏈 NFL Prop Scanner")
+    
+    if not api_key:
+        st.error("Odds API key required.")
+    else:
+        # Single player lookup
+        st.subheader("🔍 Single Player Prop")
+        col1, col2 = st.columns(2)
+        with col1:
+            nfl_player = st.text_input("Player Name", placeholder="Patrick Mahomes, Derrick Henry...",
+                                       key="nfl_player")
+        with col2:
+            nfl_prop = st.selectbox("Prop Type", get_sport_prop_types('nfl'),
+                                    format_func=lambda x: x.replace('player_', '').replace('_', ' ').title(),
+                                    key="nfl_prop")
+        
+        col3, col4, col5 = st.columns(3)
+        with col3:
+            nfl_line = st.number_input("Line", value=250.5, step=0.5, key="nfl_line")
+        with col4:
+            nfl_odds = st.number_input("Odds", value=-110, step=5, key="nfl_odds")
+        with col5:
+            nfl_dir = st.selectbox("Direction", ["over", "under"], key="nfl_dir")
+        
+        if st.button("📊 Analyze Player", type="primary", key="nfl_analyze"):
+            with st.spinner(f"Looking up {nfl_player}..."):
+                result = evaluate_any_sport_prop(nfl_player, 'nfl', nfl_prop, nfl_line, nfl_odds, nfl_dir)
+            
+            if result and 'error' not in result:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("True Prob", f"{result.get('hit_rate', 0):.1%}")
+                with col2:
+                    st.metric("Implied Prob", f"{result.get('implied_prob', 0):.1%}")
+                with col3:
+                    edge = result.get('edge', 0)
+                    st.metric("Edge", f"{edge:+.1%}",
+                             delta='PLAY' if edge > 0.03 else 'FADE' if edge < 0 else 'MARGINAL')
+                with col4:
+                    st.metric("EV/$1", f"${result.get('ev_per_dollar', 0):+.3f}")
+            elif result:
+                st.error(result.get('error', 'Unknown error'))
+        
+        # Full scan
+        st.divider()
+        st.subheader("⚡ Full NFL Scan")
+        st.caption("Best during regular season (September - January)")
+        
+        if st.button("⚡ SCAN ALL NFL PROPS", type="primary", use_container_width=True):
+            with st.spinner("Scanning NFL props..."):
+                results_df = scan_sport_props(api_key, 'nfl')
+            
+            if not results_df.empty:
+                st.success(f"Evaluated {len(results_df)} props")
+                
+                display_cols = [c for c in ['player', 'event', 'prop_type', 'direction',
+                               'line', 'odds', 'hit_rate', 'implied_prob', 'edge',
+                               'ev_per_dollar', 'confidence', 'verdict']
+                               if c in results_df.columns]
+                st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
+                
+                plays = results_df[results_df['edge'] > 0.03]
+                if not plays.empty:
+                    st.subheader("🏆 Top Plays")
+                    for _, play in plays.head(10).iterrows():
+                        st.write(f"**{play.get('player', '')}** — {play.get('direction', '').upper()} "
+                                f"{play.get('line', '')} ({play.get('prop_type', '').replace('player_', '')}) | "
+                                f"Edge: {play.get('edge', 0):+.1%} | {play.get('verdict', '')}")
+            else:
+                st.warning("No NFL props found. Check if games are scheduled today.")
+
+
+# ============================================================
+# PAGE: SINGLE PROP ANALYSIS (multi-sport)
 # ============================================================
 
 elif "Single Prop" in page:
     st.title("🔍 Single Prop Analysis")
-    st.caption("Evaluate any player prop — batter or pitcher")
+    st.caption("Evaluate any prop — MLB, NBA, WNBA, or NFL")
+    
+    sport_select = st.radio("Sport", ["MLB", "NBA", "WNBA", "NFL"], horizontal=True)
+    sport_key = sport_select.lower()
     
     col1, col2 = st.columns(2)
     with col1:
-        player_name = st.text_input("Player Name", placeholder="Ty France, Tarik Skubal, etc.")
+        player_name = st.text_input("Player Name", placeholder="Ty France, A'ja Wilson, Patrick Mahomes...")
     with col2:
-        prop_type = st.selectbox("Prop Type", get_all_prop_types(),
-                                 format_func=lambda x: x.replace('_', ' ').title())
+        prop_type = st.selectbox("Prop Type", get_sport_prop_types(sport_key),
+                                 format_func=lambda x: x.replace('player_', '').replace('pitcher_', '').replace('batter_', '').replace('_', ' ').title())
     
     col3, col4, col5 = st.columns(3)
     with col3:
-        prop_line = st.number_input("Line", min_value=0.0, max_value=20.0, value=1.5, step=0.5)
+        default_line = 6.5 if sport_key == 'mlb' else 20.5 if sport_key in ['nba', 'wnba'] else 250.5
+        prop_line = st.number_input("Line", min_value=0.0, max_value=500.0, value=default_line, step=0.5)
     with col4:
         odds = st.number_input("American Odds", min_value=-500, max_value=500, value=-110)
     with col5:
@@ -372,8 +540,8 @@ elif "Single Prop" in page:
     
     if st.button("📊 Analyze", type="primary"):
         if player_name:
-            with st.spinner(f"Looking up {player_name}..."):
-                result = evaluate_single_player_prop(player_name, prop_type, prop_line, odds, direction)
+            with st.spinner(f"Looking up {player_name} ({sport_select})..."):
+                result = evaluate_any_sport_prop(player_name, sport_key, prop_type, prop_line, odds, direction)
             
             if result and 'error' not in result:
                 st.divider()
@@ -392,7 +560,6 @@ elif "Single Prop" in page:
                 
                 st.metric("Confidence", result.get('confidence', 'unknown').upper())
                 
-                # Show stat-specific info
                 stat_avg = result.get('stat_avg', result.get('k_avg', result.get('hr_pg', result.get('sb_pg', 'N/A'))))
                 st.metric("Player Average", f"{stat_avg}")
                 st.metric("Separation from line", f"{result.get('separation', 'N/A')}")
@@ -650,4 +817,4 @@ elif "Lineup" in page:
 # ============================================================
 
 st.divider()
-st.caption("EV+ Gambit v2.1 | The Cardinal Rule: Enumerate before you evaluate.")
+st.caption("EV+ Gambit v2.2 | MLB • NBA • WNBA • NFL | Enumerate before you evaluate.")
