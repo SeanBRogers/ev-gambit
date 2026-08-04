@@ -1,9 +1,7 @@
 """
-EV+ GAMBIT v2.0 — Streamlit Web App
-One-click deployment: streamlit run streamlit_app.py
-Hosted deployment: push to GitHub → connect Streamlit Cloud
-
-Place ev_gambit_v2.py in the same directory.
+EV+ GAMBIT v2.1 — Streamlit Web App
+Full prop scanner: K, Hits, TB, HR, RBI, Runs, SB, NRFI/YRFI, Totals
+Hosted at: ev-gambit.streamlit.app
 """
 
 import streamlit as st
@@ -19,6 +17,17 @@ from ev_gambit_v2 import (
     MLB_STADIUMS, implied_probability, calculate_ev, bayesian_hit_rate,
     evaluate_k_prop, sweep_alt_lines, parlay_odds, apply_boost,
     parlay_ev, rr_by_2s, get_lineup, scan_full_slate, rank_k_props
+)
+
+# Import extended prop evaluators
+from prop_extensions import (
+    get_batter_season_stats, get_pitcher_extended_stats,
+    evaluate_hits_prop, evaluate_tb_prop, evaluate_hr_prop,
+    evaluate_rbi_prop, evaluate_runs_prop, evaluate_sb_prop,
+    evaluate_hits_allowed_prop, evaluate_walks_allowed_prop,
+    evaluate_er_prop, evaluate_outs_prop, evaluate_nrfi,
+    evaluate_game_total, fetch_all_props, scan_all_props,
+    evaluate_single_player_prop, get_all_prop_types, search_player_id
 )
 
 # ============================================================
@@ -87,22 +96,25 @@ st.markdown("""
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/target.png", width=60)
     st.title("EV+ GAMBIT")
-    st.caption("v2.0 — Prop Analytics Engine")
+    st.caption("v2.1 — Full Prop Analytics Engine")
     st.divider()
     
-    # API Key
-    api_key = st.text_input("🔑 Odds API Key", type="password", 
-                            help="Get free key at the-odds-api.com")
+    # API Key — pull from secrets first, fallback to text input
+    api_key = st.secrets.get("ODDS_API_KEY", "")
+    if not api_key:
+        api_key = st.text_input("🔑 Odds API Key", type="password", 
+                                help="Get free key at the-odds-api.com")
     if api_key:
-        st.success("Key loaded")
+        st.success("🔑 Key loaded")
     else:
-        st.warning("Add key for live odds scanning")
+        st.warning("Add key in Settings → Secrets")
     
     st.divider()
     
     # Navigation
     page = st.radio("📍 Navigation", [
         "🎯 Daily K Scanner",
+        "⚡ Full Prop Scanner",
         "🔍 Single Prop Analysis",
         "📊 Alt-Line Sweeper",
         "💰 Parlay Builder",
@@ -234,84 +246,167 @@ if "Daily K Scanner" in page:
 
 
 # ============================================================
+# PAGE: FULL PROP SCANNER (NEW)
+# ============================================================
+
+elif "Full Prop" in page:
+    st.title("⚡ Full Prop Scanner")
+    st.caption("Every prop. Every game. Every edge. One button.")
+    
+    if not api_key:
+        st.error("Odds API key required. Add it in Settings → Secrets.")
+    else:
+        prop_filter = st.multiselect(
+            "Filter prop types (leave empty for all)",
+            ['pitcher_strikeouts', 'batter_hits', 'batter_total_bases', 
+             'batter_home_runs', 'batter_rbis', 'batter_runs_scored',
+             'batter_stolen_bases', 'pitcher_hits_allowed', 'pitcher_walks',
+             'pitcher_earned_runs'],
+            default=[]
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            min_edge = st.number_input("Minimum edge %", value=0.0, step=1.0) / 100
+        with col2:
+            show_fades = st.checkbox("Show fades (negative EV)", value=False)
+        
+        if st.button("⚡ SCAN ALL PROPS", type="primary", use_container_width=True):
+            with st.spinner("Pulling props from Odds API and evaluating against MLB stats..."):
+                # Fetch all props
+                props_df = fetch_all_props(api_key)
+            
+            if props_df.empty:
+                st.warning("No props found. Games may not have started yet or API limit reached.")
+            else:
+                st.success(f"Found {len(props_df)} prop lines across {props_df['event'].nunique()} games")
+                
+                # Apply prop type filter
+                if prop_filter:
+                    props_df = props_df[props_df['prop_type'].isin(prop_filter)]
+                
+                # Evaluate each prop
+                results = []
+                games = get_todays_games()
+                progress = st.progress(0, text="Evaluating props...")
+                
+                grouped = props_df.groupby(['player', 'prop_type', 'direction', 'line']).first().reset_index()
+                total = len(grouped)
+                
+                for idx, row in grouped.iterrows():
+                    progress.progress(min((idx + 1) / max(total, 1), 1.0),
+                                     text=f"Evaluating {row['player']} {row['prop_type']}...")
+                    try:
+                        result = evaluate_single_player_prop(
+                            row['player'], row['prop_type'],
+                            row['line'], row['odds'], row['direction']
+                        )
+                        if result and 'error' not in result:
+                            result['player'] = row.get('player', result.get('player', result.get('pitcher', 'Unknown')))
+                            result['event'] = row['event']
+                            result['prop_type'] = row['prop_type']
+                            result['book'] = row['book']
+                            result['odds'] = row['odds']
+                            results.append(result)
+                    except:
+                        continue
+                    time.sleep(0.15)
+                
+                progress.empty()
+                
+                if results:
+                    results_df = pd.DataFrame(results)
+                    results_df = results_df.sort_values('edge', ascending=False)
+                    
+                    # Add verdict
+                    results_df['verdict'] = results_df['edge'].apply(
+                        lambda x: '✅ PLAY' if x > 0.03 else '⚠️ MARGINAL' if x > 0 else '❌ FADE'
+                    )
+                    
+                    # Filter by min edge
+                    if not show_fades:
+                        results_df = results_df[results_df['edge'] >= min_edge]
+                    
+                    display_cols = [c for c in ['player', 'event', 'prop_type', 'direction',
+                                   'line', 'odds', 'hit_rate', 'implied_prob', 'edge',
+                                   'ev_per_dollar', 'confidence', 'verdict']
+                                   if c in results_df.columns]
+                    
+                    st.subheader(f"📊 {len(results_df)} Props Evaluated")
+                    st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
+                    
+                    # Top plays
+                    plays = results_df[results_df['edge'] > 0.03]
+                    if not plays.empty:
+                        st.subheader("🏆 Top Plays (Edge > 3%)")
+                        for _, play in plays.head(10).iterrows():
+                            st.write(f"**{play.get('player', 'Unknown')}** — {play.get('direction', '').upper()} {play.get('line', '')} "
+                                    f"({play.get('prop_type', '')}) | Edge: {play.get('edge', 0):+.1%} | "
+                                    f"EV: ${play.get('ev_per_dollar', 0):+.3f} | {play.get('verdict', '')}")
+                else:
+                    st.warning("No props could be evaluated. Player lookups may have failed.")
+
+
+# ============================================================
 # PAGE: SINGLE PROP ANALYSIS
 # ============================================================
 
 elif "Single Prop" in page:
     st.title("🔍 Single Prop Analysis")
+    st.caption("Evaluate any player prop — batter or pitcher")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns(2)
     with col1:
-        pitcher_name = st.text_input("Pitcher Name", placeholder="Jacob Misiorowski")
+        player_name = st.text_input("Player Name", placeholder="Ty France, Tarik Skubal, etc.")
     with col2:
-        prop_line = st.number_input("K Line", min_value=0.5, max_value=20.0, value=6.5, step=0.5)
+        prop_type = st.selectbox("Prop Type", get_all_prop_types(),
+                                 format_func=lambda x: x.replace('_', ' ').title())
+    
+    col3, col4, col5 = st.columns(3)
     with col3:
-        odds = st.number_input("American Odds", min_value=-500, max_value=500, value=-110)
+        prop_line = st.number_input("Line", min_value=0.0, max_value=20.0, value=1.5, step=0.5)
     with col4:
+        odds = st.number_input("American Odds", min_value=-500, max_value=500, value=-110)
+    with col5:
         direction = st.selectbox("Direction", ["over", "under"])
     
-    col5, col6 = st.columns(2)
-    with col5:
-        park_team = st.selectbox("Ballpark (home team)", list(MLB_STADIUMS.keys()))
-    with col6:
-        k_factor = MLB_STADIUMS.get(park_team, {}).get('k_factor', 1.0)
-        st.metric("Park K Factor", f"{k_factor:.2f}")
-    
     if st.button("📊 Analyze", type="primary"):
-        if pitcher_name:
-            # Get pitcher stats from MLB API
-            games = get_todays_games()
-            pitcher_stats = None
+        if player_name:
+            with st.spinner(f"Looking up {player_name}..."):
+                result = evaluate_single_player_prop(player_name, prop_type, prop_line, odds, direction)
             
-            if not games.empty:
-                for _, game in games.iterrows():
-                    for side in ['away', 'home']:
-                        if pitcher_name.lower() in game[f'{side}_pitcher_name'].lower():
-                            pid = game[f'{side}_pitcher_id']
-                            pitcher_stats = get_pitcher_season_stats(pid)
-                            break
-            
-            if not pitcher_stats:
-                st.warning("Pitcher not found in today's slate. Enter stats manually.")
-                manual_col1, manual_col2, manual_col3 = st.columns(3)
-                with manual_col1:
-                    manual_k = st.number_input("K per Start", value=6.0, step=0.1)
-                with manual_col2:
-                    manual_gs = st.number_input("Games Started", value=15, step=1)
-                with manual_col3:
-                    manual_total_k = st.number_input("Total Ks", value=90, step=1)
+            if result and 'error' not in result:
+                st.divider()
+                col1, col2, col3, col4 = st.columns(4)
                 
-                pitcher_stats = {
-                    'name': pitcher_name,
-                    'k_per_start': manual_k,
-                    'games_started': manual_gs,
-                    'strikeouts': manual_total_k,
-                }
-            
-            if pitcher_stats:
-                result = evaluate_k_prop(pitcher_stats, prop_line, odds, direction, k_factor)
+                with col1:
+                    st.metric("True Probability", f"{result.get('hit_rate', 0):.1%}")
+                with col2:
+                    st.metric("Implied Probability", f"{result.get('implied_prob', 0):.1%}")
+                with col3:
+                    edge = result.get('edge', 0)
+                    verdict = 'PLAY' if edge > 0.03 else 'FADE' if edge < 0 else 'MARGINAL'
+                    st.metric("Edge", f"{edge:+.1%}", delta=verdict)
+                with col4:
+                    st.metric("EV per $1", f"${result.get('ev_per_dollar', 0):+.3f}")
                 
-                if 'error' not in result:
-                    # Display results
-                    st.divider()
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric("True Probability", f"{result['hit_rate']:.1%}")
-                    with col2:
-                        st.metric("Implied Probability", f"{result['implied_prob']:.1%}")
-                    with col3:
-                        edge_color = "normal" if result['edge'] > 0 else "inverse"
-                        st.metric("Edge", f"{result['edge']:+.1%}", 
-                                 delta=f"{'PLAY' if result['edge'] > 0.03 else 'FADE' if result['edge'] < 0 else 'MARGINAL'}")
-                    with col4:
-                        st.metric("EV per $1", f"${result['ev_per_dollar']:+.3f}")
-                    
-                    st.metric("Confidence", result['confidence'].upper())
-                    st.metric("K Average (park-adjusted)", f"{result['k_avg']:.1f}")
-                    st.metric("Separation from line", f"{result['separation']:.1f}")
+                st.metric("Confidence", result.get('confidence', 'unknown').upper())
+                
+                # Show stat-specific info
+                stat_avg = result.get('stat_avg', result.get('k_avg', result.get('hr_pg', result.get('sb_pg', 'N/A'))))
+                st.metric("Player Average", f"{stat_avg}")
+                st.metric("Separation from line", f"{result.get('separation', 'N/A')}")
+                
+                if edge > 0.03:
+                    st.success(f"✅ Positive EV: {edge:+.1%} edge — PLAY")
+                elif edge > 0:
+                    st.warning(f"⚠️ Marginal: {edge:+.1%} edge")
                 else:
-                    st.error(result['error'])
+                    st.error(f"❌ Negative EV: {edge:+.1%} edge — FADE")
+            elif result and 'error' in result:
+                st.error(result['error'])
+            else:
+                st.error("Could not evaluate prop. Check player name and prop type.")
 
 
 # ============================================================
@@ -555,4 +650,4 @@ elif "Lineup" in page:
 # ============================================================
 
 st.divider()
-st.caption("EV+ Gambit v2.0 | The Cardinal Rule: Enumerate before you evaluate.")
+st.caption("EV+ Gambit v2.1 | The Cardinal Rule: Enumerate before you evaluate.")
