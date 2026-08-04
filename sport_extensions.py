@@ -168,30 +168,62 @@ def get_nba_player_stats(player_name, league='nba'):
             }
         
         elif league == 'wnba':
-            from nba_api.stats.static import players
-            from nba_api.stats.endpoints import playergamelog
+            from nba_api.stats.endpoints import commonallplayers, playergamelog
             
-            # WNBA uses same API with league_id parameter
-            player_list = [p for p in players.get_active_players() 
-                          if player_name.lower() in p['full_name'].lower()]
-            
-            if not player_list:
+            # WNBA players require CommonAllPlayers with LeagueID='10'
+            # players.get_active_players() ONLY returns NBA — that's the bug
+            try:
+                all_wnba = commonallplayers.CommonAllPlayers(
+                    league_id='10',
+                    season='2025-26',
+                    is_only_current_season=1
+                )
+                wnba_df = all_wnba.get_data_frames()[0]
+                
+                # Search for player by name
+                matches = wnba_df[wnba_df['DISPLAY_FIRST_LAST'].str.contains(player_name, case=False, na=False)]
+                
+                if matches.empty:
+                    # Try last name only
+                    last_name = player_name.split()[-1] if ' ' in player_name else player_name
+                    matches = wnba_df[wnba_df['DISPLAY_FIRST_LAST'].str.contains(last_name, case=False, na=False)]
+                
+                if matches.empty:
+                    return {}
+                
+                player_id = matches.iloc[0]['PERSON_ID']
+                player_full_name = matches.iloc[0]['DISPLAY_FIRST_LAST']
+                
+            except Exception as e:
+                print(f"WNBA player lookup error: {e}")
                 return {}
             
-            player_id = player_list[0]['id']
-            gamelog = playergamelog.PlayerGameLog(
-                player_id=player_id,
-                season='2026',
-                league_id='10'  # WNBA league ID
-            )
-            df = gamelog.get_data_frames()[0]
+            # Get game log with WNBA league_id
+            try:
+                gamelog = playergamelog.PlayerGameLog(
+                    player_id=player_id,
+                    season='2025-26',
+                    league_id='10'
+                )
+                df = gamelog.get_data_frames()[0]
+            except Exception as e:
+                # Try alternate season format
+                try:
+                    gamelog = playergamelog.PlayerGameLog(
+                        player_id=player_id,
+                        season='2026',
+                        league_id='10'
+                    )
+                    df = gamelog.get_data_frames()[0]
+                except:
+                    return {}
             
             if df.empty:
                 return {}
             
             gp = len(df)
             return {
-                'name': player_list[0]['full_name'],
+                'name': player_full_name,
                 'games_played': gp,
                 'pts_pg': round(df['PTS'].mean(), 2),
                 'reb_pg': round(df['REB'].mean(), 2),
