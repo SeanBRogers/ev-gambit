@@ -135,11 +135,15 @@ def find_game_arbs(api_key, sport='mlb'):
                 best = team_odds.loc[team_odds['odds'].idxmax()]
                 sides[team] = {'odds': best['odds'], 'book': best['book']}
         
-        # Check pairs for arbs
+        # Check pairs for arbs (must be DIFFERENT books)
         team_list = list(sides.keys())
         for i in range(len(team_list)):
             for j in range(i + 1, len(team_list)):
                 t1, t2 = team_list[i], team_list[j]
+                
+                # Skip if same book
+                if sides[t1]['book'] == sides[t2]['book']:
+                    continue
                 result = find_arb(sides[t1]['odds'], sides[t2]['odds'])
                 if result['arb_exists']:
                     result['game'] = game
