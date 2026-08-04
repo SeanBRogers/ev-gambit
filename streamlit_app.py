@@ -288,7 +288,7 @@ elif "Full Prop" in page:
         
         if st.button("⚡ SCAN ALL PROPS", type="primary", use_container_width=True):
             with st.spinner("Pulling props from Odds API and evaluating against MLB stats..."):
-                # Fetch all props
+                # Fetch all props (includes all books)
                 props_df = fetch_all_props(api_key)
             
             if props_df.empty:
@@ -300,15 +300,25 @@ elif "Full Prop" in page:
                 if prop_filter:
                     props_df = props_df[props_df['prop_type'].isin(prop_filter)]
                 
-                # Evaluate each prop
+                # NESTED ANALYSIS: For each prop, find the BEST odds across all books
+                # Then evaluate using those best odds, and tag which book to use
                 results = []
                 games = get_todays_games()
-                progress = st.progress(0, text="Evaluating props...")
+                progress = st.progress(0, text="Evaluating props with best available odds...")
                 
-                grouped = props_df.groupby(['player', 'prop_type', 'direction', 'line']).first().reset_index()
-                total = len(grouped)
+                # Group by player + prop type + line + direction, find best odds
+                best_odds = props_df.groupby(['player', 'prop_type', 'direction', 'line']).apply(
+                    lambda g: g.loc[g['odds'].idxmax()]
+                ).reset_index(drop=True)
                 
-                for idx, row in grouped.iterrows():
+                # Also build a lookup of all books for each prop
+                all_books = props_df.groupby(['player', 'prop_type', 'direction', 'line']).apply(
+                    lambda g: ', '.join([f"{r['book']}({r['odds']:+d})" for _, r in g.sort_values('odds', ascending=False).iterrows()])
+                ).reset_index(name='all_books_odds')
+                
+                total = len(best_odds)
+                
+                for idx, row in best_odds.iterrows():
                     progress.progress(min((idx + 1) / max(total, 1), 1.0),
                                      text=f"Evaluating {row['player']} {row['prop_type']}...")
                     try:
@@ -320,8 +330,21 @@ elif "Full Prop" in page:
                             result['player'] = row.get('player', result.get('player', result.get('pitcher', 'Unknown')))
                             result['event'] = row['event']
                             result['prop_type'] = row['prop_type']
-                            result['book'] = row['book']
-                            result['odds'] = row['odds']
+                            result['best_book'] = row['book']
+                            result['best_odds'] = row['odds']
+                            
+                            # Attach all books pricing
+                            match = all_books[
+                                (all_books['player'] == row['player']) & 
+                                (all_books['prop_type'] == row['prop_type']) &
+                                (all_books['direction'] == row['direction']) &
+                                (all_books['line'] == row['line'])
+                            ]
+                            if not match.empty:
+                                result['all_books'] = match.iloc[0]['all_books_odds']
+                            else:
+                                result['all_books'] = row['book']
+                            
                             results.append(result)
                     except:
                         continue
@@ -343,11 +366,11 @@ elif "Full Prop" in page:
                         results_df = results_df[results_df['edge'] >= min_edge]
                     
                     display_cols = [c for c in ['player', 'event', 'prop_type', 'direction',
-                                   'line', 'odds', 'hit_rate', 'implied_prob', 'edge',
-                                   'ev_per_dollar', 'confidence', 'verdict']
+                                   'line', 'best_odds', 'best_book', 'hit_rate', 'implied_prob', 
+                                   'edge', 'ev_per_dollar', 'confidence', 'verdict']
                                    if c in results_df.columns]
                     
-                    st.subheader(f"📊 {len(results_df)} Props Evaluated")
+                    st.subheader(f"📊 {len(results_df)} Props Evaluated (using best available odds)")
                     st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
                     
                     # Top plays — must have BOTH edge AND confidence
@@ -359,9 +382,17 @@ elif "Full Prop" in page:
                         st.subheader(f"🏆 Top Plays — {len(plays)} found (Edge > 3% + High/Moderate Confidence)")
                         for _, play in plays.head(10).iterrows():
                             conf_icon = '🟢' if play.get('confidence') == 'high' else '🟡'
-                            st.write(f"{conf_icon} **{play.get('player', 'Unknown')}** — {play.get('direction', '').upper()} {play.get('line', '')} "
-                                    f"({play.get('prop_type', '')}) | Edge: {play.get('edge', 0):+.1%} | "
-                                    f"EV: ${play.get('ev_per_dollar', 0):+.3f} | Confidence: {play.get('confidence', '').upper()}")
+                            st.write(f"{conf_icon} **{play.get('player', 'Unknown')}** — "
+                                    f"{play.get('direction', '').upper()} {play.get('line', '')} "
+                                    f"({play.get('prop_type', '')}) | "
+                                    f"Edge: {play.get('edge', 0):+.1%} | "
+                                    f"EV: ${play.get('ev_per_dollar', 0):+.3f} | "
+                                    f"**Bet @ {play.get('best_book', '').upper()} ({play.get('best_odds', 0):+d})** | "
+                                    f"Confidence: {play.get('confidence', '').upper()}")
+                            # Show all book prices
+                            all_bks = play.get('all_books', '')
+                            if all_bks:
+                                st.caption(f"    All books: {all_bks}")
                     else:
                         st.info("No high-confidence plays found. Check the full table for marginal edges.")
                 else:
