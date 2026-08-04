@@ -294,7 +294,56 @@ elif "Full Prop" in page:
         with col2:
             show_fades = st.checkbox("Show fades (negative EV)", value=False)
         
+        # Display previous results if they exist (survives rerun from slip add)
+        if 'scan_results' in st.session_state and not st.session_state.get('rescan', False):
+            results_df = st.session_state['scan_results']
+            
+            # Add verdict
+            if 'verdict' not in results_df.columns:
+                results_df['verdict'] = results_df['edge'].apply(
+                    lambda x: '✅ PLAY' if x > 0.03 else '⚠️ MARGINAL' if x > 0 else '❌ FADE'
+                )
+            
+            # Filter by min edge
+            display_results = results_df[results_df['edge'] >= min_edge] if not show_fades else results_df
+            
+            display_cols = [c for c in ['player', 'event', 'prop_type', 'direction',
+                           'line', 'best_odds', 'best_book', 'hit_rate', 'implied_prob', 
+                           'edge', 'ev_per_dollar', 'confidence', 'verdict']
+                           if c in display_results.columns]
+            
+            st.subheader(f"📊 {len(display_results)} Props (cached results)")
+            st.dataframe(display_results[display_cols], use_container_width=True, hide_index=True)
+            
+            # Top plays with add to slip
+            plays = display_results[
+                (display_results['edge'] > 0.03) & 
+                (display_results['confidence'].isin(['high', 'moderate']))
+            ]
+            if not plays.empty:
+                st.subheader(f"🏆 Top Plays — {len(plays)} found (Edge > 3% + High/Moderate Confidence)")
+                for play_idx, play in plays.head(10).iterrows():
+                    conf_icon = '🟢' if play.get('confidence') == 'high' else '🟡'
+                    col_info, col_btn = st.columns([5, 1])
+                    with col_info:
+                        st.write(f"{conf_icon} **{play.get('player', 'Unknown')}** — "
+                                f"{play.get('direction', '').upper()} {play.get('line', '')} "
+                                f"({play.get('prop_type', '')}) | "
+                                f"Edge: {play.get('edge', 0):+.1%} | "
+                                f"EV: ${play.get('ev_per_dollar', 0):+.3f} | "
+                                f"**Bet @ {play.get('best_book', '').upper()} ({play.get('best_odds', 0):+d})** | "
+                                f"Confidence: {play.get('confidence', '').upper()}")
+                        all_bks = play.get('all_books', '')
+                        if all_bks:
+                            st.caption(f"    All books: {all_bks}")
+                    with col_btn:
+                        if st.button("➕", key=f"cached_slip_{play_idx}"):
+                            added = add_to_slip(play.to_dict())
+                            if added:
+                                st.rerun()
+        
         if st.button("⚡ SCAN ALL PROPS", type="primary", use_container_width=True):
+            st.session_state['rescan'] = True
             with st.spinner("Pulling props from Odds API and evaluating against MLB stats..."):
                 # Fetch all props (includes all books)
                 props_df = fetch_all_props(api_key)
@@ -352,10 +401,12 @@ elif "Full Prop" in page:
                     time.sleep(0.15)
                 
                 progress.empty()
+                st.session_state['rescan'] = False
                 
                 if results:
                     results_df = pd.DataFrame(results)
                     results_df = results_df.sort_values('edge', ascending=False)
+                    st.session_state['scan_results'] = results_df
                     
                     # Add verdict
                     results_df['verdict'] = results_df['edge'].apply(
