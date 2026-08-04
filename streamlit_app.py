@@ -343,14 +343,20 @@ elif "Full Prop" in page:
                     st.subheader(f"📊 {len(results_df)} Props Evaluated")
                     st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
                     
-                    # Top plays
-                    plays = results_df[results_df['edge'] > 0.03]
+                    # Top plays — must have BOTH edge AND confidence
+                    plays = results_df[
+                        (results_df['edge'] > 0.03) & 
+                        (results_df['confidence'].isin(['high', 'moderate']))
+                    ]
                     if not plays.empty:
-                        st.subheader("🏆 Top Plays (Edge > 3%)")
+                        st.subheader(f"🏆 Top Plays — {len(plays)} found (Edge > 3% + High/Moderate Confidence)")
                         for _, play in plays.head(10).iterrows():
-                            st.write(f"**{play.get('player', 'Unknown')}** — {play.get('direction', '').upper()} {play.get('line', '')} "
+                            conf_icon = '🟢' if play.get('confidence') == 'high' else '🟡'
+                            st.write(f"{conf_icon} **{play.get('player', 'Unknown')}** — {play.get('direction', '').upper()} {play.get('line', '')} "
                                     f"({play.get('prop_type', '')}) | Edge: {play.get('edge', 0):+.1%} | "
-                                    f"EV: ${play.get('ev_per_dollar', 0):+.3f} | {play.get('verdict', '')}")
+                                    f"EV: ${play.get('ev_per_dollar', 0):+.3f} | Confidence: {play.get('confidence', '').upper()}")
+                    else:
+                        st.info("No high-confidence plays found. Check the full table for marginal edges.")
                 else:
                     st.warning("No props could be evaluated. Player lookups may have failed.")
 
@@ -423,15 +429,19 @@ elif "NBA/WNBA" in page:
                                if c in results_df.columns]
                 st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
                 
-                plays = results_df[results_df['edge'] > 0.03]
+                plays = results_df[
+                    (results_df['edge'] > 0.03) & 
+                    (results_df['confidence'].isin(['high', 'moderate']))
+                ]
                 if not plays.empty:
-                    st.subheader("🏆 Top Plays")
+                    st.subheader(f"🏆 Top Plays — {len(plays)} found")
                     for _, play in plays.head(10).iterrows():
-                        st.write(f"**{play.get('player', '')}** — {play.get('direction', '').upper()} "
+                        conf_icon = '🟢' if play.get('confidence') == 'high' else '🟡'
+                        st.write(f"{conf_icon} **{play.get('player', '')}** — {play.get('direction', '').upper()} "
                                 f"{play.get('line', '')} ({play.get('prop_type', '').replace('player_', '')}) | "
-                                f"Edge: {play.get('edge', 0):+.1%} | {play.get('verdict', '')}")
-            else:
-                st.warning(f"No {league_choice} props found. Season may be inactive or no games today.")
+                                f"Edge: {play.get('edge', 0):+.1%} | Confidence: {play.get('confidence', '').upper()}")
+                else:
+                    st.info("No high-confidence plays found. Check the full table.")
 
 
 # ============================================================
@@ -500,15 +510,19 @@ elif "NFL" in page:
                                if c in results_df.columns]
                 st.dataframe(results_df[display_cols], use_container_width=True, hide_index=True)
                 
-                plays = results_df[results_df['edge'] > 0.03]
+                plays = results_df[
+                    (results_df['edge'] > 0.03) & 
+                    (results_df['confidence'].isin(['high', 'moderate']))
+                ]
                 if not plays.empty:
-                    st.subheader("🏆 Top Plays")
+                    st.subheader(f"🏆 Top Plays — {len(plays)} found")
                     for _, play in plays.head(10).iterrows():
-                        st.write(f"**{play.get('player', '')}** — {play.get('direction', '').upper()} "
+                        conf_icon = '🟢' if play.get('confidence') == 'high' else '🟡'
+                        st.write(f"{conf_icon} **{play.get('player', '')}** — {play.get('direction', '').upper()} "
                                 f"{play.get('line', '')} ({play.get('prop_type', '').replace('player_', '')}) | "
-                                f"Edge: {play.get('edge', 0):+.1%} | {play.get('verdict', '')}")
-            else:
-                st.warning("No NFL props found. Check if games are scheduled today.")
+                                f"Edge: {play.get('edge', 0):+.1%} | Confidence: {play.get('confidence', '').upper()}")
+                else:
+                    st.info("No high-confidence plays found. Check the full table.")
 
 
 # ============================================================
