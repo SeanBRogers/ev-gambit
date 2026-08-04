@@ -151,6 +151,34 @@ with st.sidebar:
     st.caption("Built by Sean Rogers")
     st.caption("Go Cocks!!! #ForeverToThee")
 
+# ============================================================
+# BET SLIP FUNCTIONS (must be defined before page logic)
+# ============================================================
+
+if 'bet_slip' not in st.session_state:
+    st.session_state.bet_slip = []
+
+def add_to_slip(play):
+    """Add a play to the bet slip."""
+    for existing in st.session_state.bet_slip:
+        if (existing.get('player') == play.get('player') and 
+            existing.get('prop_type') == play.get('prop_type') and
+            existing.get('line') == play.get('line')):
+            return False
+    st.session_state.bet_slip.append(play)
+    return True
+
+def remove_from_slip(index):
+    """Remove a play from the bet slip by index."""
+    if 0 <= index < len(st.session_state.bet_slip):
+        st.session_state.bet_slip.pop(index)
+
+def clear_slip():
+    """Clear the entire bet slip."""
+    st.session_state.bet_slip = []
+
+
+
 
 # ============================================================
 # ODDS API INTEGRATION
@@ -1249,35 +1277,6 @@ elif "Lineup" in page:
 
 st.divider()
 st.caption("EV+ Gambit v2.2 | MLB • NBA • WNBA • NFL | Enumerate before you evaluate.")
-
-
-# ============================================================
-# BET SLIP (persistent sidebar widget)
-# ============================================================
-
-# Initialize bet slip in session state
-if 'bet_slip' not in st.session_state:
-    st.session_state.bet_slip = []
-
-def add_to_slip(play):
-    """Add a play to the bet slip."""
-    # Avoid duplicates
-    for existing in st.session_state.bet_slip:
-        if (existing.get('player') == play.get('player') and 
-            existing.get('prop_type') == play.get('prop_type') and
-            existing.get('line') == play.get('line')):
-            return False
-    st.session_state.bet_slip.append(play)
-    return True
-
-def remove_from_slip(index):
-    """Remove a play from the bet slip by index."""
-    if 0 <= index < len(st.session_state.bet_slip):
-        st.session_state.bet_slip.pop(index)
-
-def clear_slip():
-    """Clear the entire bet slip."""
-    st.session_state.bet_slip = []
 
 # Display bet slip in sidebar
 with st.sidebar:
