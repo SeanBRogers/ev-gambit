@@ -4,3 +4,5 @@ numpy
 requests
 scipy
 pybaseball
+nba_api
+nfl_data_py
