@@ -63,45 +63,185 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    /* ============================================
+       EV+ GAMBIT — Professional Dark Theme
+       Inspired by Linemate.io
+       ============================================ */
+    
+    /* Base */
     .stApp {
-        background-color: #0f1117;
+        background-color: #0d1117;
+        color: #c9d1d9;
     }
-    .metric-card {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border: 1px solid #2a2a4a;
-        border-radius: 12px;
-        padding: 20px;
-        margin: 8px 0;
-    }
-    .positive-ev {
-        color: #00ff88;
-        font-weight: 700;
-    }
-    .negative-ev {
-        color: #ff4757;
-        font-weight: 700;
-    }
-    .edge-high {
-        background-color: #00ff8820;
-        border-left: 4px solid #00ff88;
-        padding: 8px 12px;
-        border-radius: 4px;
-    }
-    .edge-low {
-        background-color: #ff475720;
-        border-left: 4px solid #ff4757;
-        padding: 8px 12px;
-        border-radius: 4px;
-    }
+    
+    /* Sidebar */
     div[data-testid="stSidebar"] {
-        background-color: #1a1a2e;
+        background-color: #161b22;
+        border-right: 1px solid #21262d;
     }
-    h1, h2, h3 {
-        color: #e0e0e0;
+    
+    /* Headers */
+    h1 { color: #f0f6fc; font-weight: 700; letter-spacing: -0.5px; }
+    h2 { color: #e6edf3; font-weight: 600; }
+    h3 { color: #c9d1d9; font-weight: 600; }
+    
+    /* Play Cards */
+    .play-card {
+        background: #161b22;
+        border: 1px solid #21262d;
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin: 10px 0;
+        transition: border-color 0.2s;
     }
+    .play-card:hover {
+        border-color: #388bfd;
+    }
+    .play-card-high {
+        border-left: 4px solid #3fb950;
+    }
+    .play-card-moderate {
+        border-left: 4px solid #d29922;
+    }
+    .play-card-fade {
+        border-left: 4px solid #f85149;
+    }
+    
+    /* Edge Badges */
+    .badge-play {
+        background: #23863620;
+        color: #3fb950;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 0.8em;
+        font-weight: 600;
+    }
+    .badge-fade {
+        background: #f8514920;
+        color: #f85149;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 0.8em;
+        font-weight: 600;
+    }
+    .badge-marginal {
+        background: #d2992220;
+        color: #d29922;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 0.8em;
+        font-weight: 600;
+    }
+    .badge-book {
+        background: #388bfd20;
+        color: #388bfd;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 0.8em;
+        font-weight: 600;
+    }
+    
+    /* Confidence Indicators */
+    .conf-high { color: #3fb950; font-weight: 700; }
+    .conf-mod { color: #d29922; font-weight: 700; }
+    .conf-low { color: #8b949e; }
+    
+    /* Odds Display */
+    .odds-plus { color: #3fb950; font-weight: 700; font-size: 1.1em; }
+    .odds-minus { color: #f85149; font-weight: 700; font-size: 1.1em; }
+    
+    /* Stats Table */
+    .stat-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 6px 0;
+        border-bottom: 1px solid #21262d;
+        font-size: 0.9em;
+    }
+    .stat-label { color: #8b949e; }
+    .stat-value { color: #e6edf3; font-weight: 600; }
+    .stat-pct { color: #3fb950; font-weight: 600; }
+    
+    /* Bet Slip */
+    .slip-card {
+        background: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin: 6px 0;
+    }
+    .slip-player {
+        color: #f0f6fc;
+        font-weight: 600;
+        font-size: 0.95em;
+    }
+    .slip-detail {
+        color: #8b949e;
+        font-size: 0.8em;
+    }
+    .slip-odds {
+        color: #3fb950;
+        font-weight: 700;
+        font-size: 1.05em;
+    }
+    
+    /* Parlay Summary */
+    .parlay-box {
+        background: linear-gradient(135deg, #161b22 0%, #1c2333 100%);
+        border: 1px solid #388bfd40;
+        border-radius: 10px;
+        padding: 16px;
+        margin: 10px 0;
+    }
+    
+    /* Data Tables */
     .stDataFrame {
-        background-color: #16213e;
+        background-color: #161b22;
+        border-radius: 8px;
     }
+    
+    /* Buttons */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #388bfd 0%, #1f6feb 100%);
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #58a6ff 0%, #388bfd 100%);
+    }
+    
+    /* Metrics */
+    div[data-testid="stMetric"] {
+        background: #161b22;
+        border: 1px solid #21262d;
+        border-radius: 8px;
+        padding: 12px 16px;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.4em;
+    }
+    
+    /* Dividers */
+    hr {
+        border-color: #21262d;
+    }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+    
+    /* Success/Warning/Error boxes */
+    div[data-testid="stAlert"] {
+        border-radius: 8px;
+    }
+    
+    /* Remove Streamlit branding */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -454,22 +594,55 @@ elif "Full Prop" in page:
                         (results_df['confidence'].isin(['high', 'moderate']))
                     ]
                     if not plays.empty:
-                        st.subheader(f"🏆 Top Plays — {len(plays)} found (Edge > 3% + High/Moderate Confidence)")
+                        st.subheader(f"🏆 Top Plays — {len(plays)} found")
+                        st.caption("Edge > 3% + High/Moderate Confidence")
                         for play_idx, play in plays.head(10).iterrows():
-                            conf_icon = '🟢' if play.get('confidence') == 'high' else '🟡'
-                            col_info, col_btn = st.columns([5, 1])
+                            conf = play.get('confidence', 'low')
+                            card_class = 'play-card-high' if conf == 'high' else 'play-card-moderate'
+                            edge = play.get('edge', 0)
+                            odds = play.get('best_odds', 0)
+                            odds_class = 'odds-plus' if odds > 0 else 'odds-minus'
+                            conf_class = 'conf-high' if conf == 'high' else 'conf-mod'
+                            prop_clean = play.get('prop_type', '').replace('pitcher_', '').replace('batter_', '').replace('player_', '').replace('_', ' ').title()
+                            all_bks = play.get('all_books', '')
+                            
+                            card_html = f"""
+                            <div class="play-card {card_class}">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <div>
+                                        <span style="color:#f0f6fc; font-weight:700; font-size:1.1em;">{play.get('player', 'Unknown')}</span>
+                                        <span style="color:#8b949e; margin-left:8px;">{play.get('direction', '').upper()} {play.get('line', '')} {prop_clean}</span>
+                                    </div>
+                                    <div>
+                                        <span class="{odds_class}">{odds:+d}</span>
+                                        <span class="badge-book" style="margin-left:8px;">{play.get('best_book', '').upper()}</span>
+                                    </div>
+                                </div>
+                                <div style="display:flex; gap:16px; margin-top:8px;">
+                                    <div class="stat-row" style="border:none; padding:0;">
+                                        <span class="stat-label">Edge</span>
+                                        <span class="stat-pct" style="margin-left:6px;">{edge:+.1%}</span>
+                                    </div>
+                                    <div class="stat-row" style="border:none; padding:0;">
+                                        <span class="stat-label">EV/$1</span>
+                                        <span class="stat-value" style="margin-left:6px;">${play.get('ev_per_dollar', 0):+.3f}</span>
+                                    </div>
+                                    <div class="stat-row" style="border:none; padding:0;">
+                                        <span class="stat-label">Confidence</span>
+                                        <span class="{conf_class}" style="margin-left:6px;">{conf.upper()}</span>
+                                    </div>
+                                </div>
+                                <div style="margin-top:6px; color:#8b949e; font-size:0.8em;">
+                                    {f'All books: {all_bks}' if all_bks else ''}
+                                </div>
+                            </div>
+                            """
+                            
+                            col_info, col_btn = st.columns([6, 1])
                             with col_info:
-                                st.write(f"{conf_icon} **{play.get('player', 'Unknown')}** — "
-                                        f"{play.get('direction', '').upper()} {play.get('line', '')} "
-                                        f"({play.get('prop_type', '')}) | "
-                                        f"Edge: {play.get('edge', 0):+.1%} | "
-                                        f"EV: ${play.get('ev_per_dollar', 0):+.3f} | "
-                                        f"**Bet @ {play.get('best_book', '').upper()} ({play.get('best_odds', 0):+d})** | "
-                                        f"Confidence: {play.get('confidence', '').upper()}")
-                                all_bks = play.get('all_books', '')
-                                if all_bks:
-                                    st.caption(f"    All books: {all_bks}")
+                                st.markdown(card_html, unsafe_allow_html=True)
                             with col_btn:
+                                st.write("")
                                 if st.button("➕", key=f"add_slip_{play_idx}"):
                                     added = add_to_slip(play.to_dict())
                                     if added:
