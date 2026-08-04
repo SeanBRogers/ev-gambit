@@ -42,6 +42,11 @@ from arb_scanner import (
 )
 
 # Import game-level odds
+from game_analysis import (
+    analyze_game, analyze_todays_games, get_team_record, get_team_id_from_abbr,
+    calculate_win_probability, project_game_total
+)
+
 from game_odds import (
     fetch_game_odds, shop_game_lines, find_game_arbs, get_best_game_odds
 )
@@ -990,11 +995,89 @@ elif "Game Lines" in page:
         
         col1, col2 = st.columns(2)
         with col1:
-            view_type = st.radio("View", ["Best Lines Summary", "Full Line Shopping", "Game Arbs"], horizontal=True)
+            view_type = st.radio("View", ["Game Insights", "Best Lines Summary", "Full Line Shopping", "Game Arbs"], horizontal=True)
         
         if st.button("🏟️ LOAD GAME ODDS", type="primary", use_container_width=True):
             
-            if view_type == "Best Lines Summary":
+            if view_type == "Game Insights":
+                with st.spinner("Analyzing today's matchups..."):
+                    if game_sport == 'mlb':
+                        analyses = analyze_todays_games()
+                    else:
+                        analyses = []
+                        st.info("Game insights currently available for MLB. Other sports coming soon.")
+                
+                if analyses:
+                    st.success(f"Analyzed {len(analyses)} games")
+                    
+                    for analysis in analyses:
+                        wp = analysis.get('win_probability', {})
+                        tp = analysis.get('projected_total', {})
+                        home = analysis.get('home_team', '?')
+                        away = analysis.get('away_team', '?')
+                        hr = analysis.get('home_record', {})
+                        ar = analysis.get('away_record', {})
+                        home_prob = wp.get('home_prob', 0.5)
+                        away_prob = wp.get('away_prob', 0.5)
+                        home_color = '#3fb950' if home_prob > 0.55 else '#d29922' if home_prob > 0.45 else '#f85149'
+                        away_color = '#3fb950' if away_prob > 0.55 else '#d29922' if away_prob > 0.45 else '#f85149'
+                        
+                        st.markdown(f"""
+                        <div class="play-card" style="border-left: 4px solid {home_color};">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                                <div style="font-size:1.2em; font-weight:700; color:#f0f6fc;">
+                                    {away} @ {home}
+                                </div>
+                                <div style="color:#8b949e; font-size:0.85em;">
+                                    {analysis.get('venue', '')}
+                                </div>
+                            </div>
+                            
+                            <div style="display:flex; justify-content:space-around; margin-bottom:12px;">
+                                <div style="text-align:center;">
+                                    <div style="color:#8b949e; font-size:0.8em;">Away</div>
+                                    <div style="color:{away_color}; font-weight:700; font-size:1.4em;">{away_prob:.0%}</div>
+                                    <div style="color:#8b949e; font-size:0.8em;">{ar.get('wins', 0)}-{ar.get('losses', 0)}</div>
+                                </div>
+                                <div style="text-align:center;">
+                                    <div style="color:#8b949e; font-size:0.8em;">Projected Total</div>
+                                    <div style="color:#388bfd; font-weight:700; font-size:1.4em;">{tp.get('projected_total', 'N/A')}</div>
+                                    <div style="color:#8b949e; font-size:0.8em;">{tp.get('away_runs_proj', '?')}-{tp.get('home_runs_proj', '?')}</div>
+                                </div>
+                                <div style="text-align:center;">
+                                    <div style="color:#8b949e; font-size:0.8em;">Home</div>
+                                    <div style="color:{home_color}; font-weight:700; font-size:1.4em;">{home_prob:.0%}</div>
+                                    <div style="color:#8b949e; font-size:0.8em;">{hr.get('wins', 0)}-{hr.get('losses', 0)}</div>
+                                </div>
+                            </div>
+                            
+                            <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #21262d;">
+                                <div>
+                                    <span style="color:#8b949e;">Pitching: </span>
+                                    <span style="color:#e6edf3;">{analysis.get('away_pitcher', 'TBD')} ({analysis.get('away_era', 'N/A')} ERA)</span>
+                                    <span style="color:#8b949e;"> vs </span>
+                                    <span style="color:#e6edf3;">{analysis.get('home_pitcher', 'TBD')} ({analysis.get('home_era', 'N/A')} ERA)</span>
+                                </div>
+                            </div>
+                            
+                            <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap;">
+                                <span style="color:#8b949e; font-size:0.8em;">L10: {away} {ar.get('last10_wins', '?')}-{ar.get('last10_losses', '?')}</span>
+                                <span style="color:#8b949e; font-size:0.8em;">L10: {home} {hr.get('last10_wins', '?')}-{hr.get('last10_losses', '?')}</span>
+                                <span style="color:#8b949e; font-size:0.8em;">{hr.get('streak', '')} {home}</span>
+                                <span style="color:#8b949e; font-size:0.8em;">{ar.get('streak', '')} {away}</span>
+                            </div>
+                            
+                            <div style="margin-top:8px;">
+                        """, unsafe_allow_html=True)
+                        
+                        # Show reasoning
+                        for reason in wp.get('reasons', []):
+                            st.caption(f"→ {reason}")
+                        
+                        st.markdown("</div></div>", unsafe_allow_html=True)
+                        st.write("")
+            
+            elif view_type == "Best Lines Summary":
                 with st.spinner(f"Loading {game_sport.upper()} game odds..."):
                     summary = get_best_game_odds(api_key, game_sport)
                 
