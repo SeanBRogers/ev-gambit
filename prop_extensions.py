@@ -15,7 +15,7 @@ import time
 
 from ev_gambit_v2 import (
     implied_probability, calculate_ev, bayesian_hit_rate,
-    MLB_STADIUMS, get_todays_games
+    MLB_STADIUMS, get_todays_games, evaluate_k_prop, PREFERRED_BOOKS
 )
 
 
@@ -389,6 +389,53 @@ def evaluate_game_total(away_pitcher_era, home_pitcher_era,
 # MULTI-PROP SCANNER
 # ============================================================
 
+# ============================================================
+# ODDS API TEAM NAME → ABBREVIATION MAPPING
+# The Odds API uses full team names. MLB_STADIUMS uses abbreviations.
+# This bridge ensures park factors come from the VENUE (home team
+# per the Odds API), not from stale roster data.
+# ============================================================
+
+TEAM_NAME_TO_ABBR = {
+    'Arizona Diamondbacks': 'AZ',
+    'Atlanta Braves': 'ATL',
+    'Baltimore Orioles': 'BAL',
+    'Boston Red Sox': 'BOS',
+    'Chicago Cubs': 'CHC',
+    'Chicago White Sox': 'CWS',
+    'Cincinnati Reds': 'CIN',
+    'Cleveland Guardians': 'CLE',
+    'Colorado Rockies': 'COL',
+    'Detroit Tigers': 'DET',
+    'Houston Astros': 'HOU',
+    'Kansas City Royals': 'KC',
+    'Los Angeles Angels': 'LAA',
+    'Los Angeles Dodgers': 'LAD',
+    'Miami Marlins': 'MIA',
+    'Milwaukee Brewers': 'MIL',
+    'Minnesota Twins': 'MIN',
+    'New York Mets': 'NYM',
+    'New York Yankees': 'NYY',
+    'Oakland Athletics': 'ATH',
+    'Philadelphia Phillies': 'PHI',
+    'Pittsburgh Pirates': 'PIT',
+    'San Diego Padres': 'SD',
+    'San Francisco Giants': 'SF',
+    'Seattle Mariners': 'SEA',
+    'St. Louis Cardinals': 'STL',
+    'Tampa Bay Rays': 'TB',
+    'Texas Rangers': 'TEX',
+    'Toronto Blue Jays': 'TOR',
+    'Washington Nationals': 'WSH',
+}
+
+
+def get_park_factor(home_team_abbr, factor_type='k_factor'):
+    """Get park factor from home team abbreviation. Defaults to 1.0 if unknown."""
+    stadium = MLB_STADIUMS.get(home_team_abbr, {})
+    return stadium.get(factor_type, 1.0)
+
+
 PROP_TYPE_MAP = {
     'pitcher_strikeouts': 'k',
     'batter_hits': 'hits',
@@ -441,13 +488,17 @@ def fetch_all_props(api_key, sport='baseball_mlb'):
         if not event_id:
             continue
         
+        home_team_full = event.get('home_team', '')
+        away_team_full = event.get('away_team', '')
+        home_team_abbr = TEAM_NAME_TO_ABBR.get(home_team_full, '')
+        
         odds_url = f'https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds'
         odds_params = {
             'apiKey': api_key,
             'regions': 'us',
             'markets': markets,
             'oddsFormat': 'american',
-            'bookmakers': 'draftkings,fanduel'
+            'bookmakers': PREFERRED_BOOKS
         }
         try:
             odds_res = requests.get(odds_url, params=odds_params)
@@ -456,7 +507,9 @@ def fetch_all_props(api_key, sport='baseball_mlb'):
                     for market in bookmaker.get('markets', []):
                         for outcome in market.get('outcomes', []):
                             odds_data.append({
-                                'event': f"{event.get('away_team', '')} @ {event.get('home_team', '')}",
+                                'event': f"{away_team_full} @ {home_team_full}",
+                                'home_team': home_team_full,
+                                'home_team_abbr': home_team_abbr,
                                 'game_time': event.get('commence_time', ''),
                                 'player': outcome.get('description', outcome.get('name', 'Unknown')),
                                 'prop_type': market.get('key', ''),
@@ -478,10 +531,12 @@ def scan_all_props(api_key):
     THE BIG SCAN. Pull every prop from every game, evaluate each one,
     and return a ranked DataFrame of edges.
     
-    This is the function that replaces me doing 15 manual searches.
+    CRITICAL: Park factor comes from the Odds API event's HOME TEAM,
+    not from player roster data. This ensures post-deadline trades
+    don't corrupt the venue assignment.
     """
     print("=" * 60)
-    print("EV+ GAMBIT v2.1 — FULL PROP SCANNER")
+    print("EV+ GAMBIT v2.2 — FULL PROP SCANNER")
     print(f"Date: {datetime.date.today().strftime('%A, %B %d, %Y')}")
     print("Scanning ALL prop types across ALL games...")
     print("=" * 60)
@@ -510,6 +565,11 @@ def scan_all_props(api_key):
         odds = row['odds']
         direction = row['direction']
         
+        # Get park factor from the EVENT's home team, not the player's team
+        home_abbr = row.get('home_team_abbr', '')
+        park_kf = get_park_factor(home_abbr, 'k_factor') if home_abbr else 1.0
+        venue_name = MLB_STADIUMS.get(home_abbr, {}).get('name', 'Unknown')
+        
         try:
             if prop_cat in ['hits', 'tb', 'hr', 'rbi', 'runs', 'sb']:
                 # Batter prop — need batter stats
@@ -523,6 +583,8 @@ def scan_all_props(api_key):
                             result['event'] = row['event']
                             result['prop_type'] = row['prop_type']
                             result['book'] = row['book']
+                            result['venue'] = venue_name
+                            result['park_k_factor'] = park_kf
                             results.append(result)
                             evaluated += 1
             
@@ -538,8 +600,25 @@ def scan_all_props(api_key):
                             result['event'] = row['event']
                             result['prop_type'] = row['prop_type']
                             result['book'] = row['book']
+                            result['venue'] = venue_name
+                            result['park_k_factor'] = park_kf
                             results.append(result)
                             evaluated += 1
+            
+            elif prop_cat == 'k':
+                # Strikeout prop — uses park K factor
+                player_id = find_player_id(player_name, games, 'pitcher')
+                if player_id:
+                    from ev_gambit_v2 import get_pitcher_season_stats as get_ps
+                    stats = get_ps(player_id)
+                    if stats:
+                        result = evaluate_k_prop(stats, line, odds, direction, park_kf)
+                        result['event'] = row['event']
+                        result['prop_type'] = row['prop_type']
+                        result['book'] = row['book']
+                        result['venue'] = venue_name
+                        results.append(result)
+                        evaluated += 1
         
         except Exception as e:
             continue
@@ -618,15 +697,19 @@ def get_all_prop_types():
     ]
 
 
-def evaluate_single_player_prop(player_name, prop_type, line, odds, direction='over'):
+def evaluate_single_player_prop(player_name, prop_type, line, odds, direction='over', home_team_abbr=''):
     """
     One-command single prop evaluation for the Streamlit UI.
     Handles both batter and pitcher props automatically.
+    
+    home_team_abbr: the HOME TEAM abbreviation for park factor.
+    If empty, defaults to 1.0 (no park adjustment).
     """
     player_id = search_player_id(player_name)
     if not player_id:
         return {'error': f'Player not found: {player_name}'}
     
+    park_kf = get_park_factor(home_team_abbr) if home_team_abbr else 1.0
     prop_cat = PROP_TYPE_MAP.get(prop_type, '')
     
     if prop_cat in ['hits', 'tb', 'hr', 'rbi', 'runs', 'sb']:
@@ -635,7 +718,9 @@ def evaluate_single_player_prop(player_name, prop_type, line, odds, direction='o
             return {'error': 'No batting stats found'}
         eval_fn = EVAL_FUNCTIONS.get(prop_cat)
         if eval_fn:
-            return eval_fn(stats, line, odds, direction)
+            result = eval_fn(stats, line, odds, direction)
+            result['venue_factor'] = park_kf
+            return result
     
     elif prop_cat in ['hits_allowed', 'walks_allowed', 'earned_runs', 'outs_recorded']:
         stats = get_pitcher_extended_stats(player_id)
@@ -643,14 +728,16 @@ def evaluate_single_player_prop(player_name, prop_type, line, odds, direction='o
             return {'error': 'No pitching stats found'}
         eval_fn = EVAL_FUNCTIONS.get(prop_cat)
         if eval_fn:
-            return eval_fn(stats, line, odds, direction)
+            result = eval_fn(stats, line, odds, direction)
+            result['venue_factor'] = park_kf
+            return result
     
     elif prop_cat == 'k' or prop_type == 'pitcher_strikeouts':
         from ev_gambit_v2 import evaluate_k_prop, get_pitcher_season_stats
         stats = get_pitcher_season_stats(player_id)
         if not stats:
             return {'error': 'No pitching stats found'}
-        return evaluate_k_prop(stats, line, odds, direction)
+        return evaluate_k_prop(stats, line, odds, direction, park_kf)
     
     return {'error': f'Unsupported prop type: {prop_type}'}
 

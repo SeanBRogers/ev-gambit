@@ -29,6 +29,14 @@ from matplotlib.ticker import MaxNLocator
 warnings.filterwarnings('ignore')
 
 # ============================================================
+# SPORTSBOOK CONFIGURATION
+# Sean's books: FanDuel, DraftKings, Fanatics, BetMGM, Caesars
+# Change this ONE constant to update every scanner in the app
+# ============================================================
+
+PREFERRED_BOOKS = 'draftkings,fanduel,fanatics,betmgm,caesars'
+
+# ============================================================
 # MODULE 1: STADIUM & PARK FACTORS
 # ============================================================
 

@@ -16,7 +16,7 @@ import numpy as np
 import requests
 import time
 
-from ev_gambit_v2 import implied_probability
+from ev_gambit_v2 import implied_probability, PREFERRED_BOOKS
 
 
 # ============================================================
@@ -127,7 +127,7 @@ def fetch_multibook_props(api_key, sport='baseball_mlb'):
             'markets': markets,
             'oddsFormat': 'american',
             # Pull from ALL available books, not just DK/FD
-            'bookmakers': 'draftkings,fanduel,betmgm,caesars,pointsbet,williamhill_us,betrivers,unibet_us'
+            'bookmakers': PREFERRED_BOOKS
         }
         try:
             odds_res = requests.get(odds_url, params=odds_params)

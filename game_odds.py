@@ -8,7 +8,7 @@ import requests
 import pandas as pd
 import time
 
-from ev_gambit_v2 import implied_probability, calculate_ev
+from ev_gambit_v2 import implied_probability, calculate_ev, PREFERRED_BOOKS
 from arb_scanner import find_arb
 from sport_extensions import SPORT_KEYS
 
@@ -26,6 +26,7 @@ def fetch_game_odds(api_key, sport='mlb'):
         'regions': 'us',
         'markets': GAME_MARKETS,
         'oddsFormat': 'american',
+        'bookmakers': PREFERRED_BOOKS,
     }
     
     try:

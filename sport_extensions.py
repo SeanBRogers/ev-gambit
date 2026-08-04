@@ -14,7 +14,7 @@ import pandas as pd
 import datetime
 import time
 
-from ev_gambit_v2 import implied_probability, calculate_ev, bayesian_hit_rate
+from ev_gambit_v2 import implied_probability, calculate_ev, bayesian_hit_rate, PREFERRED_BOOKS
 from prop_extensions import evaluate_prop, fetch_all_props as fetch_mlb_props
 
 
@@ -82,7 +82,7 @@ def fetch_sport_props(api_key, sport='nba'):
             'regions': 'us',
             'markets': markets,
             'oddsFormat': 'american',
-            'bookmakers': 'draftkings,fanduel'
+            'bookmakers': PREFERRED_BOOKS
         }
         try:
             odds_res = requests.get(odds_url, params=odds_params)
