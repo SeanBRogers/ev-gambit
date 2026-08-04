@@ -978,7 +978,7 @@ elif "Arbitrage" in page:
 
 elif "Game Lines" in page:
     st.title("🏟️ Game Lines & Totals")
-    st.caption("Moneylines, spreads, and totals — best price at every book")
+    st.caption("Matchup analysis, best lines, and arb detection — all in one view")
     
     if not api_key:
         st.error("Odds API key required.")
@@ -993,19 +993,21 @@ elif "Game Lines" in page:
             }.get(x, x.upper()),
             key="game_sport")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            view_type = st.radio("View", ["Game Insights", "Best Lines Summary", "Full Line Shopping", "Game Arbs"], horizontal=True)
-        
-        if st.button("🏟️ LOAD GAME ODDS", type="primary", use_container_width=True):
+        if st.button("🏟️ ANALYZE GAMES", type="primary", use_container_width=True):
             
-            if view_type == "Game Insights":
+            if True:  # Single unified view
                 with st.spinner("Analyzing today's matchups..."):
                     if game_sport == 'mlb':
                         analyses = analyze_todays_games()
                     else:
                         analyses = []
-                        st.info("Game insights currently available for MLB. Other sports coming soon.")
+                    
+                    # Also fetch best odds for each game
+                    game_odds_df = get_best_game_odds(api_key, game_sport)
+                    
+                    # And check for arbs
+                    game_arbs_df = find_game_arbs(api_key, game_sport)
+                    real_arbs = game_arbs_df[game_arbs_df.get('arb_exists', False) == True] if not game_arbs_df.empty else pd.DataFrame()
                 
                 if analyses:
                     st.success(f"Analyzed {len(analyses)} games")
@@ -1046,108 +1048,80 @@ elif "Game Lines" in page:
                         for reason in wp.get('reasons', []):
                             st.caption(f"→ {reason}")
                         
-                        st.divider()
-            
-            elif view_type == "Best Lines Summary":
-                with st.spinner(f"Loading {game_sport.upper()} game odds..."):
-                    summary = get_best_game_odds(api_key, game_sport)
-                
-                if not summary.empty:
-                    st.success(f"Found {len(summary)} games")
-                    
-                    for _, game in summary.iterrows():
-                        st.subheader(game.get('game', ''))
+                        # Best available odds for this game
+                        if not game_odds_df.empty:
+                            game_str = f"{away} @ {home}" if away and home else ''
+                            # Match by partial team name
+                            game_match = game_odds_df[
+                                game_odds_df['game'].str.contains(home, case=False, na=False) |
+                                game_odds_df['game'].str.contains(hr.get('team_name', 'ZZZZZ'), case=False, na=False)
+                            ]
+                            if not game_match.empty:
+                                gm = game_match.iloc[0]
+                                st.write("**Best Available Lines:**")
+                                line_col1, line_col2, line_col3 = st.columns(3)
+                                with line_col1:
+                                    away_ml = gm.get('away_ml', 'N/A')
+                                    away_book = gm.get('away_ml_book', '')
+                                    if isinstance(away_ml, (int, float)):
+                                        st.metric(f"{gm.get('away_team', away)} ML", f"{away_ml:+.0f}", delta=away_book)
+                                with line_col2:
+                                    total = gm.get('total_line', '')
+                                    over_odds = gm.get('over_odds', '')
+                                    under_odds = gm.get('under_odds', '')
+                                    if total and isinstance(over_odds, (int, float)):
+                                        st.metric(f"O/U {total}", f"O {over_odds:+.0f} / U {under_odds:+.0f}" if isinstance(under_odds, (int, float)) else f"O {over_odds:+.0f}")
+                                        st.caption(f"O: {gm.get('over_book', '')} | U: {gm.get('under_book', '')}")
+                                with line_col3:
+                                    home_ml = gm.get('home_ml', 'N/A')
+                                    home_book = gm.get('home_ml_book', '')
+                                    if isinstance(home_ml, (int, float)):
+                                        st.metric(f"{gm.get('home_team', home)} ML", f"{home_ml:+.0f}", delta=home_book)
+                                
+                                # All books for MLs
+                                away_all = gm.get('away_ml_all', '')
+                                home_all = gm.get('home_ml_all', '')
+                                if away_all:
+                                    st.caption(f"All: {away_all}")
+                                if home_all:
+                                    st.caption(f"All: {home_all}")
                         
+                        # Arb flag if exists for this game
+                        if not real_arbs.empty:
+                            game_arb = real_arbs[real_arbs['game'].str.contains(home, case=False, na=False)]
+                            if not game_arb.empty:
+                                for _, arb in game_arb.iterrows():
+                                    roi = arb.get('roi_pct', 0)
+                                    if roi > 5:
+                                        st.warning(f"⚠️ Possible arb ({arb.get('market', '')}): {roi:.1f}% ROI — VERIFY on apps before placing")
+                                    else:
+                                        st.success(f"💎 Arb found ({arb.get('market', '')}): {roi:.1f}% ROI | {arb.get('side_1', '')} + {arb.get('side_2', '')}")
+                        
+                        st.divider()
+                
+                # Handle non-MLB sports (no analysis engine yet, just show odds)
+                if not analyses and not game_odds_df.empty:
+                    st.success(f"Found {len(game_odds_df)} games")
+                    for _, gm in game_odds_df.iterrows():
+                        st.subheader(gm.get('game', ''))
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.markdown("**Moneylines**")
-                            away = game.get('away_team', '?')
-                            home = game.get('home_team', '?')
-                            away_ml = game.get('away_ml', 'N/A')
-                            home_ml = game.get('home_ml', 'N/A')
-                            away_book = game.get('away_ml_book', '')
-                            home_book = game.get('home_ml_book', '')
-                            st.write(f"{away}: **{away_ml:+d}** ({away_book})" if isinstance(away_ml, (int, float)) else f"{away}: N/A")
-                            st.write(f"{home}: **{home_ml:+d}** ({home_book})" if isinstance(home_ml, (int, float)) else f"{home}: N/A")
-                        
+                            away_ml = gm.get('away_ml', 'N/A')
+                            if isinstance(away_ml, (int, float)):
+                                st.metric(f"{gm.get('away_team', '?')} ML", f"{away_ml:+.0f}", delta=gm.get('away_ml_book', ''))
                         with col2:
-                            st.markdown("**Spread**")
-                            away_sp = game.get('away_spread', '')
-                            home_sp = game.get('home_spread', '')
-                            away_sp_odds = game.get('away_spread_odds', '')
-                            home_sp_odds = game.get('home_spread_odds', '')
-                            if away_sp:
-                                st.write(f"{away} {away_sp:+.1f}: **{away_sp_odds:+d}** ({game.get('away_spread_book', '')})" if isinstance(away_sp_odds, (int, float)) else "")
-                            if home_sp:
-                                st.write(f"{home} {home_sp:+.1f}: **{home_sp_odds:+d}** ({game.get('home_spread_book', '')})" if isinstance(home_sp_odds, (int, float)) else "")
-                        
-                        with col3:
-                            st.markdown("**Total**")
-                            total = game.get('total_line', '')
-                            over_odds = game.get('over_odds', '')
-                            under_odds = game.get('under_odds', '')
+                            total = gm.get('total_line', '')
                             if total:
-                                st.write(f"O {total}: **{over_odds:+d}** ({game.get('over_book', '')})" if isinstance(over_odds, (int, float)) else "")
-                                st.write(f"U {total}: **{under_odds:+d}** ({game.get('under_book', '')})" if isinstance(under_odds, (int, float)) else "")
-                        
-                        # Show all ML books
-                        away_all = game.get('away_ml_all', '')
-                        home_all = game.get('home_ml_all', '')
-                        if away_all:
-                            st.caption(f"{away} all books: {away_all}")
-                        if home_all:
-                            st.caption(f"{home} all books: {home_all}")
+                                over_odds = gm.get('over_odds', '')
+                                under_odds = gm.get('under_odds', '')
+                                if isinstance(over_odds, (int, float)):
+                                    st.metric(f"O/U {total}", f"O {over_odds:+.0f}")
+                        with col3:
+                            home_ml = gm.get('home_ml', 'N/A')
+                            if isinstance(home_ml, (int, float)):
+                                st.metric(f"{gm.get('home_team', '?')} ML", f"{home_ml:+.0f}", delta=gm.get('home_ml_book', ''))
                         st.divider()
-                else:
-                    st.warning(f"No {game_sport.upper()} games found today.")
             
-            elif view_type == "Full Line Shopping":
-                with st.spinner("Comparing lines across books..."):
-                    shop = shop_game_lines(api_key, game_sport)
-                
-                if not shop.empty:
-                    st.success(f"Compared {len(shop)} lines across {shop['books_count'].max()} books")
-                    
-                    display_cols = [c for c in ['game', 'market', 'team', 'point',
-                                   'best_odds', 'best_book', 'worst_odds', 'worst_book',
-                                   'spread', 'all_books'] if c in shop.columns]
-                    st.dataframe(shop[display_cols].head(50), use_container_width=True, hide_index=True)
-                    
-                    big = shop[shop['spread'] >= 10]
-                    if not big.empty:
-                        st.subheader(f"🏆 {len(big)} lines with 10+ point spread")
-                        for _, row in big.head(15).iterrows():
-                            st.write(f"**{row['game']}** — {row['market']} {row['team']} "
-                                    f"{row.get('point', '')} | Best: {row['best_odds']:+d} ({row['best_book']}) "
-                                    f"vs Worst: {row['worst_odds']:+d} ({row['worst_book']}) | "
-                                    f"Spread: {row['spread']:.0f} pts")
-                else:
-                    st.warning("No lines found.")
-            
-            elif view_type == "Game Arbs":
-                with st.spinner("Scanning for game-level arbs..."):
-                    game_arbs = find_game_arbs(api_key, game_sport)
-                
-                if not game_arbs.empty:
-                    real = game_arbs[game_arbs.get('arb_exists', False) == True]
-                    if not real.empty:
-                        st.success(f"🤑 {len(real)} game-level arbs found!")
-                        for _, arb in real.iterrows():
-                            st.subheader(f"💎 {arb.get('game', '')} — {arb.get('market', '')}")
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("ROI", f"{arb.get('roi_pct', 0)}%")
-                            with col2:
-                                st.write(f"**{arb.get('side_1', '')}**: {arb.get('side_1_odds', 0):+d}")
-                                st.metric("Stake/$100", f"${arb.get('over_stake', 0)}")
-                            with col3:
-                                st.write(f"**{arb.get('side_2', '')}**: {arb.get('side_2_odds', 0):+d}")
-                                st.metric("Stake/$100", f"${arb.get('under_stake', 0)}")
-                            st.divider()
-                    else:
-                        st.info("No game-level arbs found. Markets are priced efficiently.")
-                else:
-                    st.warning("No games found to scan.")
 
 
 # ============================================================
