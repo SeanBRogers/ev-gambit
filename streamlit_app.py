@@ -44,7 +44,8 @@ from arb_scanner import (
 # Import game-level odds
 from game_analysis import (
     analyze_game, analyze_todays_games, get_team_record, get_team_id_from_abbr,
-    calculate_win_probability, project_game_total
+    calculate_win_probability, project_game_total,
+    build_matchup_radar_data, create_radar_chart, create_slate_quadrant
 )
 
 from game_odds import (
@@ -1044,9 +1045,18 @@ elif "Game Lines" in page:
                         # Pitching matchup
                         st.write(f"**Pitching:** {analysis.get('away_pitcher', 'TBD')} ({analysis.get('away_era', 'N/A')} ERA) vs {analysis.get('home_pitcher', 'TBD')} ({analysis.get('home_era', 'N/A')} ERA)")
                         
-                        # Reasoning
-                        for reason in wp.get('reasons', []):
-                            st.caption(f"→ {reason}")
+                        # Matchup radar chart + reasoning
+                        radar_col, reason_col = st.columns([1, 1])
+                        with radar_col:
+                            radar_data = build_matchup_radar_data(analysis)
+                            radar_fig = create_radar_chart(radar_data)
+                            st.pyplot(radar_fig, use_container_width=True)
+                            import matplotlib.pyplot as plt
+                            plt.close(radar_fig)
+                        with reason_col:
+                            st.write("**Key Factors:**")
+                            for reason in wp.get('reasons', []):
+                                st.caption(f"→ {reason}")
                         
                         # Best available odds for this game
                         if not game_odds_df.empty:

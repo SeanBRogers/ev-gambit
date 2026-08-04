@@ -322,3 +322,195 @@ def analyze_todays_games():
 if __name__ == '__main__':
     print("Game Analysis Engine loaded.")
     print("Run analyze_todays_games() for full slate analysis.")
+
+
+
+# ============================================================
+# RADAR CHART — MATCHUP POLYGON
+# ============================================================
+
+def build_matchup_radar_data(analysis):
+    """
+    Convert game analysis into radar chart data.
+    Returns dict with dimension names and values for home/away.
+    Scale: 0-100, 50 = neutral.
+    """
+    wp = analysis.get('win_probability', {})
+    hr = analysis.get('home_record', {})
+    ar = analysis.get('away_record', {})
+    
+    dimensions = ['Pitching', 'Record', 'Momentum', 'Home Field', 'Run Diff']
+    
+    # 1. Pitching (ERA-based, lower ERA = better)
+    try:
+        home_era = float(analysis.get('home_era', 4.5))
+        away_era = float(analysis.get('away_era', 4.5))
+        era_diff = away_era - home_era  # positive = home pitcher better
+        pitching_home = min(95, max(5, 50 + era_diff * 10))
+    except:
+        pitching_home = 50
+    
+    # 2. Record (win pct)
+    try:
+        home_pct = float(hr.get('pct', '.500'))
+        away_pct = float(ar.get('pct', '.500'))
+        pct_diff = home_pct - away_pct
+        record_home = min(95, max(5, 50 + pct_diff * 100))
+    except:
+        record_home = 50
+    
+    # 3. Momentum (L10)
+    try:
+        home_l10 = hr.get('last10_wins', 5)
+        away_l10 = ar.get('last10_wins', 5)
+        l10_diff = home_l10 - away_l10
+        momentum_home = min(95, max(5, 50 + l10_diff * 5))
+    except:
+        momentum_home = 50
+    
+    # 4. Home field (baseline 60 for home, adjusted)
+    try:
+        home_hw = hr.get('home_wins', 0)
+        home_hl = hr.get('home_losses', 0)
+        home_home_pct = home_hw / max(home_hw + home_hl, 1)
+        homefield_home = min(90, max(40, home_home_pct * 100))
+    except:
+        homefield_home = 57
+    
+    # 5. Run differential
+    try:
+        home_rd = hr.get('run_diff', 0)
+        away_rd = ar.get('run_diff', 0)
+        home_games = hr.get('wins', 0) + hr.get('losses', 0)
+        away_games = ar.get('wins', 0) + ar.get('losses', 0)
+        home_rdpg = home_rd / max(home_games, 1)
+        away_rdpg = away_rd / max(away_games, 1)
+        rd_diff = home_rdpg - away_rdpg
+        rundiff_home = min(95, max(5, 50 + rd_diff * 20))
+    except:
+        rundiff_home = 50
+    
+    home_values = [pitching_home, record_home, momentum_home, homefield_home, rundiff_home]
+    away_values = [100 - v for v in home_values]
+    
+    return {
+        'dimensions': dimensions,
+        'home_values': home_values,
+        'away_values': away_values,
+        'home_team': analysis.get('home_team', 'Home'),
+        'away_team': analysis.get('away_team', 'Away'),
+    }
+
+
+def create_radar_chart(radar_data):
+    """
+    Create a matplotlib radar/spider chart for a game matchup.
+    Returns a matplotlib figure.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    dimensions = radar_data['dimensions']
+    home_vals = radar_data['home_values']
+    away_vals = radar_data['away_values']
+    home_team = radar_data['home_team']
+    away_team = radar_data['away_team']
+    
+    N = len(dimensions)
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+    
+    # Close the polygon
+    home_vals_plot = home_vals + [home_vals[0]]
+    away_vals_plot = away_vals + [away_vals[0]]
+    angles_plot = angles + [angles[0]]
+    
+    fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
+    fig.patch.set_facecolor('#0d1117')
+    ax.set_facecolor('#0d1117')
+    
+    # Draw home polygon
+    ax.plot(angles_plot, home_vals_plot, 'o-', linewidth=2.5, color='#3fb950', label=f'{home_team} (Home)')
+    ax.fill(angles_plot, home_vals_plot, alpha=0.15, color='#3fb950')
+    
+    # Draw away polygon
+    ax.plot(angles_plot, away_vals_plot, 'o-', linewidth=2.5, color='#f85149', label=f'{away_team} (Away)')
+    ax.fill(angles_plot, away_vals_plot, alpha=0.15, color='#f85149')
+    
+    # 50 line (neutral)
+    neutral = [50] * (N + 1)
+    ax.plot(angles_plot, neutral, '--', linewidth=1, color='#30363d', alpha=0.7)
+    
+    # Labels
+    ax.set_xticks(angles)
+    ax.set_xticklabels(dimensions, size=11, color='#c9d1d9', fontweight='600')
+    
+    # Grid styling
+    ax.set_ylim(0, 100)
+    ax.set_yticks([25, 50, 75])
+    ax.set_yticklabels(['25', '50', '75'], size=8, color='#8b949e')
+    ax.spines['polar'].set_color('#21262d')
+    ax.grid(color='#21262d', linewidth=0.5)
+    ax.tick_params(colors='#8b949e')
+    
+    # Legend
+    legend = ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1), 
+                       facecolor='#161b22', edgecolor='#21262d', labelcolor='#c9d1d9',
+                       fontsize=10)
+    
+    # Title
+    ax.set_title(f'{away_team} @ {home_team}', 
+                 pad=20, color='#f0f6fc', fontsize=14, fontweight='700')
+    
+    plt.tight_layout()
+    return fig
+
+
+def create_slate_quadrant(analyses, game_odds_data=None):
+    """
+    Create a scatter plot quadrant for all games on the slate.
+    X = Model win probability for favored team
+    Y = Edge vs book (if available)
+    """
+    import matplotlib.pyplot as plt
+    
+    fig, ax = plt.subplots(figsize=(10, 7))
+    fig.patch.set_facecolor('#0d1117')
+    ax.set_facecolor('#161b22')
+    
+    for analysis in analyses:
+        wp = analysis.get('win_probability', {})
+        home = analysis.get('home_team', '?')
+        away = analysis.get('away_team', '?')
+        home_prob = wp.get('home_prob', 0.5)
+        away_prob = wp.get('away_prob', 0.5)
+        
+        # Plot home team
+        color_h = '#3fb950' if home_prob > 0.55 else '#d29922' if home_prob > 0.45 else '#f85149'
+        ax.scatter(home_prob * 100, 0, s=120, color=color_h, zorder=3, edgecolors='white', linewidth=0.5)
+        ax.annotate(f'{home}', (home_prob * 100, 0), textcoords="offset points",
+                   xytext=(0, 12), ha='center', fontsize=9, color=color_h, fontweight='600')
+        
+        # Plot away team
+        color_a = '#3fb950' if away_prob > 0.55 else '#d29922' if away_prob > 0.45 else '#f85149'
+        ax.scatter(away_prob * 100, 0, s=120, color=color_a, zorder=3, edgecolors='white', linewidth=0.5)
+        ax.annotate(f'{away}', (away_prob * 100, 0), textcoords="offset points",
+                   xytext=(0, -15), ha='center', fontsize=9, color=color_a, fontweight='600')
+    
+    # Quadrant lines
+    ax.axvline(x=50, color='#30363d', linestyle='--', linewidth=1)
+    
+    # Labels
+    ax.set_xlabel('Model Win Probability (%)', color='#c9d1d9', fontsize=12)
+    ax.set_xlim(20, 80)
+    ax.set_yticks([])
+    ax.spines['top'].set_color('#21262d')
+    ax.spines['right'].set_color('#21262d')
+    ax.spines['bottom'].set_color('#21262d')
+    ax.spines['left'].set_color('#21262d')
+    ax.tick_params(colors='#8b949e')
+    
+    ax.set_title('Slate Overview — Win Probability Distribution',
+                color='#f0f6fc', fontsize=14, fontweight='700', pad=15)
+    
+    plt.tight_layout()
+    return fig
