@@ -36,6 +36,11 @@ from sport_extensions import (
     scan_sport_props, SPORT_KEYS, SPORT_MARKETS
 )
 
+# Import arbitrage scanner
+from arb_scanner import (
+    scan_arbs, find_best_prices, calculate_arb_stakes, find_arb
+)
+
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -123,6 +128,8 @@ with st.sidebar:
         "⚡ Full Prop Scanner",
         "🏀 NBA/WNBA Scanner",
         "🏈 NFL Scanner",
+        "💎 Arbitrage Scanner",
+        "🛒 Line Shopping",
         "🔍 Single Prop Analysis",
         "📊 Alt-Line Sweeper",
         "💰 Parlay Builder",
@@ -523,6 +530,134 @@ elif "NFL" in page:
                                 f"Edge: {play.get('edge', 0):+.1%} | Confidence: {play.get('confidence', '').upper()}")
                 else:
                     st.info("No high-confidence plays found. Check the full table.")
+
+
+# ============================================================
+# PAGE: ARBITRAGE SCANNER
+# ============================================================
+
+elif "Arbitrage" in page:
+    st.title("💎 Arbitrage Scanner")
+    st.caption("Find guaranteed-profit opportunities across books")
+    
+    if not api_key:
+        st.error("Odds API key required.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            arb_sport = st.selectbox("Sport", ['baseball_mlb', 'basketball_nba', 'basketball_wnba', 'americanfootball_nfl'],
+                                     format_func=lambda x: x.split('_')[-1].upper(),
+                                     key="arb_sport")
+        with col2:
+            min_margin = st.number_input("Min margin %", value=0.0, step=0.1, key="arb_margin")
+        
+        if st.button("💎 SCAN FOR ARBS", type="primary", use_container_width=True):
+            with st.spinner("Scanning cross-book price gaps..."):
+                results = scan_arbs(api_key, arb_sport, min_margin)
+            
+            if not results.empty:
+                real_arbs = results[results.get('arb_exists', False) == True]
+                near_arbs = results[results.get('near_arb', False) == True]
+                
+                if not real_arbs.empty:
+                    st.success(f"🤑 {len(real_arbs)} ARBITRAGE OPPORTUNITIES FOUND!")
+                    for _, arb in real_arbs.iterrows():
+                        st.subheader(f"💎 {arb['player']} — {arb['prop_type']} {arb['line']}")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Guaranteed ROI", f"{arb['roi_pct']}%")
+                            st.metric("Margin", f"{arb['margin']}%")
+                        with col2:
+                            st.metric(f"OVER @ {arb['over_book']}", f"{arb['over_odds']:+d}")
+                            st.metric("Stake (per $100)", f"${arb['over_stake']}")
+                        with col3:
+                            st.metric(f"UNDER @ {arb['under_book']}", f"{arb['under_odds']:+d}")
+                            st.metric("Stake (per $100)", f"${arb['under_stake']}")
+                        st.caption(f"Guaranteed profit: ${arb['guaranteed_profit']} per $100 wagered")
+                        st.divider()
+                else:
+                    st.info("No pure arbitrage found. Books are priced efficiently right now.")
+                
+                if not near_arbs.empty:
+                    st.subheader(f"🔍 {len(near_arbs)} Near-Arb Opportunities (margin < 2%)")
+                    st.caption("Not guaranteed profit, but the vig is minimal — strong value on one side")
+                    display_cols = [c for c in ['player', 'prop_type', 'line', 'event',
+                                   'over_odds', 'over_book', 'under_odds', 'under_book',
+                                   'total_implied', 'margin'] if c in near_arbs.columns]
+                    st.dataframe(near_arbs[display_cols], use_container_width=True, hide_index=True)
+            else:
+                st.warning("No props found to compare. Check API key and sport selection.")
+        
+        # Manual arb calculator
+        st.divider()
+        st.subheader("🧮 Manual Arb Calculator")
+        st.caption("Enter odds from two books to check for arbitrage")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            manual_over = st.number_input("Over odds (Book A)", value=150, step=5, key="manual_over")
+        with col2:
+            manual_under = st.number_input("Under odds (Book B)", value=-120, step=5, key="manual_under")
+        with col3:
+            manual_stake = st.number_input("Total stake ($)", value=100, step=10, key="manual_stake")
+        
+        if st.button("🧮 Check Arb", key="check_arb"):
+            result = calculate_arb_stakes(manual_over, manual_under, manual_stake)
+            
+            if 'error' not in result:
+                st.success(f"✅ ARBITRAGE EXISTS! Guaranteed profit: ${result['guaranteed_profit']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric(f"Bet OVER at {result['over_odds']:+d}", f"${result['over_bet']}")
+                    st.metric("If over hits", f"${result['if_over_hits']}")
+                with col2:
+                    st.metric(f"Bet UNDER at {result['under_odds']:+d}", f"${result['under_bet']}")
+                    st.metric("If under hits", f"${result['if_under_hits']}")
+                st.metric("ROI", f"{result['roi_pct']}%")
+            else:
+                st.error(f"No arb. Combined implied: {result['total_implied']}%. Margin: {result['margin']}%")
+
+
+# ============================================================
+# PAGE: LINE SHOPPING
+# ============================================================
+
+elif "Line Shopping" in page:
+    st.title("🛒 Line Shopping")
+    st.caption("Find which book has the best price on every prop")
+    
+    if not api_key:
+        st.error("Odds API key required.")
+    else:
+        shop_sport = st.selectbox("Sport", ['baseball_mlb', 'basketball_nba', 'basketball_wnba', 'americanfootball_nfl'],
+                                  format_func=lambda x: x.split('_')[-1].upper(),
+                                  key="shop_sport")
+        
+        if st.button("🛒 SHOP ALL LINES", type="primary", use_container_width=True):
+            with st.spinner("Comparing prices across books..."):
+                results = find_best_prices(api_key, shop_sport)
+            
+            if not results.empty:
+                st.success(f"Compared {len(results)} props across {results['books_compared'].max()} books")
+                
+                # Biggest spreads first — most value in shopping
+                st.subheader("📊 Biggest Price Gaps (shop here first)")
+                display_cols = [c for c in ['player', 'prop_type', 'line', 'event',
+                               'best_over_odds', 'best_over_book', 'worst_over_odds',
+                               'over_spread', 'best_under_odds', 'best_under_book',
+                               'worst_under_odds', 'under_spread'] if c in results.columns]
+                st.dataframe(results[display_cols].head(30), use_container_width=True, hide_index=True)
+                
+                big_gaps = results[results['max_spread'] >= 15]
+                if not big_gaps.empty:
+                    st.subheader(f"🏆 {len(big_gaps)} props with 15+ point spread between books")
+                    for _, row in big_gaps.head(10).iterrows():
+                        st.write(f"**{row['player']}** — {row['prop_type']} {row['line']} | "
+                                f"Best over: {row['best_over_odds']:+.0f} ({row['best_over_book']}) vs "
+                                f"Worst: {row['worst_over_odds']:+.0f} ({row['worst_over_book']}) | "
+                                f"Spread: {row['over_spread']:.0f} pts")
+            else:
+                st.warning("No props found to compare.")
 
 
 # ============================================================
