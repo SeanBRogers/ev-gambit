@@ -612,8 +612,12 @@ elif "Full Prop" in page:
                             prop_clean = play.get('prop_type', '').replace('pitcher_', '').replace('batter_', '').replace('player_', '').replace('_', ' ').title()
                             all_bks = play.get('all_books', '')
                             
+                            event = play.get('event', '')
                             card_html = f"""
                             <div class="play-card {card_class}">
+                                <div style="color:#388bfd; font-size:0.8em; font-weight:600; margin-bottom:6px;">
+                                    ⚾ {event}
+                                </div>
                                 <div style="display:flex; justify-content:space-between; align-items:center;">
                                     <div>
                                         <span style="color:#f0f6fc; font-weight:700; font-size:1.1em;">{play.get('player', 'Unknown')}</span>
