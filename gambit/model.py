@@ -172,10 +172,10 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
     st.team_plays_eff, k_pl = team_effects("plays_resid", s2)
     pass_noise = float(np.average(1.0 / (tg["plays"] * q * (1 - q)), weights=tg["plays"]))
     st.team_pass_eff, k_pa = team_effects("pass_resid", s2q)
-    # game-script noise on logit pass share = residual var minus binomial sampling var
-    st.pass_tau = float(np.sqrt(max(s2q - pass_noise, 0.01)))
-    # remove the part of residual variance explained by team effects
-    st.plays_sigma = float(np.sqrt(s2))
+    # Residual variance minus the between-team part (now carried by team effects), and for
+    # pass share also minus binomial sampling variance -> per-game script noise.
+    st.plays_sigma = float(np.sqrt(max(s2 - s2 / k_pl, 1.0)))
+    st.pass_tau = float(np.sqrt(max(s2q - pass_noise - s2q / k_pa, 0.01)))
     st.diagnostics["team_effect_k"] = dict(plays=round(k_pl, 1), pass_share=round(k_pa, 1))
 
     Xt = np.column_stack([np.ones(len(tg)), tg["implied"]])
@@ -194,6 +194,10 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
     st.wind_ypa_slope, st.wind_ypa_se = float(bw[1]), float(sew[1])
     st.diagnostics["wind_ypa"] = dict(slope_per_mph=round(bw[1], 4), se=round(sew[1], 4),
                                       league_ypa=round(st.league_ypa, 3))
+
+    n_targets = int((op["kind"] == "target").sum())
+    st.no_receiver_rate = float(1 - n_targets / max(tg["attempts"].sum(), 1))
+    st.league_catch = float(op.loc[op["kind"] == "target", "caught"].mean())
 
     # ---------------- player layer ----------------
     pos = positions.set_index("player_id")
@@ -289,8 +293,11 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
                 if rm.sum() >= 5 and P.loc[rm, n].sum() > 0:
                     role_means[r_] = float(np.clip(P.loc[rm, c].sum() / P.loc[rm, n].sum(), 1e-4, 0.9))
                     P.loc[rm, f"m_{share}"] = role_means[r_]
-            sel = gmask & (P[n] > 0) & P["on_roster"]
-            k = _eb_strength(P.loc[sel, c], P.loc[sel, n], P.loc[sel, f"m_{share}"],
+            # MoM needs binomial-scale counts: use unweighted totals, not decay-weighted sums
+            rc, rn = {"car": ("carries", "designed_runs"), "tgt": ("targets", "attempts")}[share]
+            rr = raw.reindex(P.index)
+            sel = gmask & (rr[rn] > 0) & P["on_roster"]
+            k = _eb_strength(rr.loc[sel, rc], rr.loc[sel, rn], P.loc[sel, f"m_{share}"],
                              params.min_k, params.max_k) if sel.sum() >= 5 else params.max_k
             P.loc[gmask, f"k_{share}"] = k
             st.diagnostics["k"][f"{share}_{grp}"] = dict(
@@ -350,7 +357,10 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
     # ~ Beta(psi*s, psi*(1-s)) around his long-run share s. Estimated by method of moments.
     st.diagnostics["psi"] = {}
     for share, c, n in [("car", "carries", "designed_runs"), ("tgt", "targets", "attempts")]:
-        d = pg[pg["player_id"].isin(on_roster) & (pg[n] > 0)].copy()
+        d = pg.copy()
+        d["grp_tot"] = d.groupby(["game_id", "posteam", "group"])[c].transform("sum")
+        d = d[d["player_id"].isin(on_roster) & (d["grp_tot"] > 0)].copy()
+        n = "grp_tot"
         d["x"] = d[c] / d[n]
         for grp, dg in d.groupby("group"):
             g = dg.groupby("player_id")
@@ -375,11 +385,14 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
     eff = op[op["kind"].isin(["carry", "scramble"]) | ((op["kind"] == "target") & (op["caught"] == 1))].copy()
     eff["pool"] = np.where(eff["kind"] == "target", "catch", "rush")
     for pool, d in eff.groupby("pool"):
-        per_play_var = float(d["yards"].var())
-        tgm = d.groupby(["posteam", "game_id"])["yards"].agg(["mean", "size"]).reset_index()
+        tgm = d.groupby(["posteam", "game_id"])["yards"].agg(["mean", "size", "var"]).reset_index()
         tgm = tgm[tgm["size"] >= 5]
+        # pooled WITHIN team-game per-play variance (league-pooled variance contains between-team spread)
+        per_play_var = float(np.average(tgm["var"], weights=tgm["size"] - 1))
         tgm["team_mean"] = tgm.groupby("posteam")["mean"].transform("mean")
-        var_obs = float(np.average((tgm["mean"] - tgm["team_mean"]) ** 2, weights=tgm["size"]))
+        G = tgm.groupby("posteam")["mean"].transform("size")
+        dev2 = (tgm["mean"] - tgm["team_mean"]) ** 2 * G / (G - 1).clip(lower=1)
+        var_obs = float(np.average(dev2, weights=tgm["size"]))
         var_iid = float(np.average(per_play_var / tgm["size"], weights=tgm["size"]))
         var_game = max(var_obs - var_iid, 0.0)
         sig = float(np.sqrt(var_game) / d["yards"].mean())
@@ -449,21 +462,24 @@ def _group_scaled_shares(rng, P: pd.DataFrame, kind: str, team_shares: dict, n: 
     Removing an OUT player therefore redistributes his volume within his position group.
     Returns (shares[players, sims], other[sims]).
     """
-    draws = _beta_draws(rng, P[f"a_{kind}"], P[f"b_{kind}"], n)
+    draws = _beta_draws(rng, P[f"a_{kind}"], P[f"b_{kind}"], n)   # long-run shares (posterior)
     groups = P["group"].to_numpy()
-    if psi:
-        ps = np.array([psi.get((kind, g), 1e4) for g in groups])[:, None]
-        s = np.clip(draws, 1e-6, 1 - 1e-6)
-        draws = rng.beta(ps * s, ps * (1 - s))
     out = np.zeros_like(draws)
     for grp in np.unique(groups):
         idx = groups == grp
         target = team_shares.get(grp, np.nan)
-        s = draws[idx].sum(axis=0)
         if np.isnan(target) or target <= 0:
             out[idx] = draws[idx]
-        else:
-            out[idx] = draws[idx] / np.maximum(s, 1e-9) * target
+            continue
+        within = draws[idx] / np.maximum(draws[idx].sum(axis=0), 1e-9)
+        if psi and idx.sum() > 1:
+            # This game's within-group split ~ Dirichlet(psi * long-run split): marginals are
+            # Beta(psi*s, psi*(1-s)), the same form psi was estimated under, so the volatility
+            # survives the group-total constraint (independent Betas + renormalizing did not).
+            alpha = np.maximum(psi.get((kind, grp), 1e4) * within, 1e-3)
+            g = rng.gamma(alpha)
+            within = g / np.maximum(g.sum(axis=0), 1e-12)
+        out[idx] = within * target
     tot = out.sum(axis=0)
     scale = np.where(tot > 0.995, 0.995 / tot, 1.0)
     out = out * scale
@@ -479,13 +495,16 @@ class GameInputs:
     wind_mph: float = 0.0       # 0 for dome/closed roof
     outs: tuple = ()            # player_ids ruled out
     qb: str | None = None       # starting QB player_id override
+    adds: tuple = ()            # players returning from injury (not on the recent-snaps roster)
 
 
 def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> dict:
     """Simulate one offense. Returns {player_id: {stat: np.ndarray(n)}} plus 'meta'."""
     rng = np.random.default_rng(seed)
     P = st.players
-    roster = [p for p in st.roster.get(gi.team, []) if p not in set(gi.outs)]
+    roster = [p for p in list(st.roster.get(gi.team, [])) + [a for a in gi.adds if a in P.index]
+              if p not in set(gi.outs)]
+    roster = list(dict.fromkeys(roster))
     R = P.loc[roster].copy()
     if R.empty:
         return {"meta": {"error": f"no active roster for {gi.team}"}}
@@ -562,11 +581,18 @@ def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> d
 
     # passing yards = all receiving yards, incl. targets to players outside the modeled roster
     other_tg = attempts - targets.sum(axis=0)
-    other_catch = rng.binomial(other_tg, 0.62)
+    # attempts without a receiver (throwaways, spikes) complete 0%; the rest go to unmodeled players
+    no_recv = np.minimum(rng.binomial(attempts, st.no_receiver_rate), other_tg)
+    other_catch = rng.binomial(other_tg - no_recv, st.league_catch)
     other_yds = _bootstrap_sums(rng, other_catch, None, None, st.league_pools[("WR", "catch")], 1) * f_rec
     if qb_id is not None:
         out[qb_id]["pass_att"] = attempts
         out[qb_id]["pass_yds"] = total_rec_yds + other_yds
+    # yards are integers in box scores: round so 'X+' thresholds mean the same thing as the contract
+    for pid in list(out):
+        for key in ("rush_yds", "rec_yds", "pass_yds"):
+            if key in out[pid]:
+                out[pid][key] = np.rint(out[pid][key])
     out["meta"] = dict(team=gi.team, qb=qb_id, plays_mu=float(plays_mu),
                        pass_share_mean=float(q.mean()), td_lambda=float(lam), td_kappa=float(kappa),
                        wind_factor=float(wind_factor), roster=list(R.index))

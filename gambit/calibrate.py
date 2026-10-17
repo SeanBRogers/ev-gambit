@@ -24,9 +24,12 @@ def _logit(p):
     return np.log(p / (1 - p))
 
 
-def fit(df: pd.DataFrame, col: str = "p_model") -> dict:
+def fit(df: pd.DataFrame, col: str = "p_model", contested_only: bool = False) -> dict:
+    """Default fits on ALL graded thresholds, because the app applies the map to every
+    threshold (ladders included); fitting on contested rows only distorted the tails."""
     out = {}
-    for market, d in df[df["contested"]].groupby("market"):
+    src = df[df["contested"]] if contested_only else df
+    for market, d in src.groupby("market"):
         x, y = _logit(d[col].to_numpy()), d["y"].to_numpy()
 
         def nll(th):

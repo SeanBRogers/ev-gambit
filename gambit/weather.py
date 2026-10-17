@@ -28,23 +28,30 @@ NEUTRAL_SITE = {
     "PAR00": (48.924, 2.360), "MUN00": (48.219, 11.625), "MUN01": (48.219, 11.625),
     "FRA00": (50.069, 8.646), "MAD00": (40.453, -3.688), "DUB00": (53.361, -6.251),
     "MEL00": (-37.820, 144.983), "SAO00": (-23.545, -46.474), "BER00": (52.515, 13.239),
-    "RIO00": (-22.912, -43.230),
+    "RIO00": (-22.912, -43.230), "MAD01": (40.453, -3.688), "MEX00": (19.303, -99.150),
 }
 INDOOR = {"dome", "closed"}
+# Retractable/covered venues: nflverse leaves `roof` blank for future games here. Default to
+# closed (wind 0) unless the user knows otherwise.
+RETRACTABLE = {"ATL97", "IND00", "HOU00", "PHO00", "DAL00", "MAD01"}
 
 
-def stadium_coords(home_team: str, stadium_id: str | None):
+def stadium_coords(home_team: str, stadium_id: str | None, home_stadium_id: str | None = None):
+    """Neutral sites by id; the home team's coordinates only when the game is at its usual
+    stadium. An unrecognized venue returns None rather than silently using the home city."""
     if stadium_id and stadium_id in NEUTRAL_SITE:
         return NEUTRAL_SITE[stadium_id]
+    if home_stadium_id is not None and stadium_id and stadium_id != home_stadium_id:
+        return None
     return HOME_STADIUM.get(home_team)
 
 
 def kickoff_weather(home_team: str, stadium_id: str | None, gameday: str, gametime: str,
-                    timeout: float = 8.0) -> dict:
+                    home_stadium_id: str | None = None, timeout: float = 8.0) -> dict:
     """Forecast at the kickoff hour (gametime is US Eastern in nflverse)."""
-    coords = stadium_coords(home_team, stadium_id)
+    coords = stadium_coords(home_team, stadium_id, home_stadium_id)
     if coords is None:
-        return {"error": f"no coordinates for {home_team}/{stadium_id}"}
+        return {"error": f"unrecognized venue {stadium_id} — enter wind manually"}
     lat, lon = coords
     try:
         r = requests.get("https://api.open-meteo.com/v1/forecast", timeout=timeout, params=dict(

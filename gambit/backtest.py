@@ -42,9 +42,10 @@ THRESHOLDS = {
 STAT_COL = {"rush_yds": "rushing_yards", "receptions": "receptions", "rec_yds": "receiving_yards",
             "pass_yds": "passing_yards"}
 OLD_SIGMA = {"rush_yds": 25.0, "receptions": 1.5, "rec_yds": 25.0, "pass_yds": 45.0}
-# relevance: only grade players who would plausibly have that prop posted
-RELEVANT = {"rush_yds": ("rush_att", 6), "receptions": ("targets", 2.5), "rec_yds": ("targets", 3),
-            "pass_yds": ("pass_att", 15), "anytime_td": ("touches", 2)}
+# Relevance (would this prop plausibly be posted?) from PRE-GAME box scores only — mean over the
+# player's last 3 games — never from model output, which would select rows the model likes.
+RELEVANT = {"rush_yds": ("carries", 6), "receptions": ("targets", 2.5), "rec_yds": ("targets", 3),
+            "pass_yds": ("attempts", 15), "anytime_td": ("touches", 2)}
 
 
 def _old_prob(mean_pg, gp, thr, market, td_rate=None):
@@ -89,21 +90,27 @@ def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | No
                 if "error" in sim.get("meta", {}):
                     continue
                 for pid, d in sim.items():
-                    if pid == "meta" or pid not in wk_stats.index:
+                    if pid == "meta" or pid not in played:
                         continue
-                    actual = wk_stats.loc[pid]
-                    if isinstance(actual, pd.DataFrame):
-                        actual = actual.iloc[0]
+                    if pid in wk_stats.index:
+                        actual = wk_stats.loc[pid]
+                        if isinstance(actual, pd.DataFrame):
+                            actual = actual.iloc[0]
+                    else:  # on the field but no box-score row: every stat is 0
+                        actual = pd.Series(0.0, index=list(STAT_COL.values()) + ["tds"])
                     h = hist[hist["player_id"] == pid].sort_values("t")
                     last8 = h.tail(8)
                     cur = h[h["season"] == season]
                     base_src = cur if len(cur) else h[h["season"] == season - 1]
                     d = dict(d)
-                    d["touches"] = d["rush_att"] + d["targets"]
                     d["anytime_td"] = d["tds"]
+                    last3 = h.tail(3)
+                    pre = {c: float(last3[c].fillna(0).mean()) if len(last3) else 0.0
+                           for c in ["carries", "targets", "attempts"]}
+                    pre["touches"] = pre["carries"] + pre["targets"]
                     for market, thrs in THRESHOLDS.items():
                         rel_key, rel_min = RELEVANT[market]
-                        if rel_key not in d or d[rel_key].mean() < rel_min:
+                        if pre[rel_key] < rel_min or market not in d:
                             continue
                         if market == "anytime_td":
                             outcome_val = actual["tds"]

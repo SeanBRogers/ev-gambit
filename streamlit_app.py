@@ -62,8 +62,8 @@ def get_state(season: int, week: int):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_weather(home, stadium_id, gameday, gametime):
-    return W.kickoff_weather(home, stadium_id, gameday, gametime)
+def get_weather(home, stadium_id, gameday, gametime, home_stadium_id):
+    return W.kickoff_weather(home, stadium_id, gameday, gametime, home_stadium_id)
 
 
 def summarize(stv: M.State, sims: dict, cal: dict, use_cal: bool) -> pd.DataFrame:
@@ -98,6 +98,8 @@ def summarize(stv: M.State, sims: dict, cal: dict, use_cal: bool) -> pd.DataFram
 # ---------------------------------------------------------------------------
 
 pbp, pos, snaps, sch, inj = load_all(SEASON)
+# each team's usual home venue = its most frequent stadium_id this season (neutral sites are rare)
+home_stadium = sch.groupby("home_team")["stadium_id"].agg(lambda x: x.value_counts().index[0]).to_dict()
 open_weeks = sorted(sch.loc[sch["result"].isna() & (sch["game_type"] == "REG"), "week"].unique())
 with st.sidebar:
     st.title("EV+ Gambit v3")
@@ -129,21 +131,27 @@ with tab_slate:
         st.stop()
     games["label"] = games.apply(
         lambda g: f"{g['away_team']} @ {g['home_team']} — {g['gameday']} {g['gametime']} ET"
-                  + (f" | home {g['spread_line']:+.1f}, total {g['total_line']:.1f}" if pd.notna(g["spread_line"]) else " | no line yet"),
+                  + (f" | {g['home_team']} {-g['spread_line']:+.1f}, total {g['total_line']:.1f}" if pd.notna(g["spread_line"]) else " | no line yet"),
         axis=1)
     label = st.selectbox("Game", games["label"].tolist())
     g = games[games["label"] == label].iloc[0]
 
     c1, c2, c3 = st.columns(3)
-    spread = c1.number_input("Home spread (+ = home favored)", value=float(g["spread_line"]) if pd.notna(g["spread_line"]) else 0.0, step=0.5)
+    home_book = c1.number_input(f"{g['home_team']} spread (book notation: −3 = {g['home_team']} favored by 3)",
+                                value=-float(g["spread_line"]) if pd.notna(g["spread_line"]) else 0.0, step=0.5)
+    spread = -home_book  # internal convention (nflverse): + = home favored
     total = c2.number_input("Total", value=float(g["total_line"]) if pd.notna(g["total_line"]) else 44.0, step=0.5)
     roof = g["roof"] if isinstance(g["roof"], str) else "unknown"
+    home_sid = home_stadium.get(g["home_team"])
     wx = {}
     if roof in W.INDOOR:
         default_wind = 0.0
         c3.caption(f"Roof: {roof} → wind not applied")
+    elif roof == "unknown" and g["stadium_id"] in W.RETRACTABLE:
+        default_wind = 0.0
+        c3.caption("Retractable roof, status not yet published → wind defaults to 0. Override if it will be open.")
     else:
-        wx = get_weather(g["home_team"], g["stadium_id"], g["gameday"], g["gametime"])
+        wx = get_weather(g["home_team"], g["stadium_id"], g["gameday"], g["gametime"], home_sid)
         default_wind = float(wx.get("wind_mph", 0.0)) if "error" not in wx else 0.0
         if "error" in wx:
             c3.caption(f"Roof: {roof}. Forecast unavailable ({wx['error'][:60]}) — enter wind manually.")
@@ -166,16 +174,31 @@ with tab_slate:
             out_labels = st.multiselect("Out / inactive", list(label_of.values()), default=default_out,
                                         key=f"out_{team}", help="Defaults to this week's Out/Doubtful report. Volume redistributes within the position group.")
             outs = [pid_of[x] for x in out_labels]
-            qb_labels = [label_of[p] for p in roster if stv.players.loc[p, "group"] == "QB" and p not in outs]
+            P = stv.players
+            returning = P[(P["team"] == team) & P["group"].isin(["QB", "RB", "WR", "TE"])
+                          & ~P.index.isin(roster) & (P["last_t"] >= (SEASON - 1) * 20)]
+            ret_label = {p: f"{P.loc[p, 'name']} ({P.loc[p, 'position']})" for p in returning.index}
+            ret_pid = {v: k for k, v in ret_label.items()}
+            add_labels = st.multiselect("Returning from injury (not in recent games)", list(ret_label.values()),
+                                        key=f"add_{team}", help="Priced from his pre-injury share; volume is taken from his position group.")
+            adds = [ret_pid[x] for x in add_labels]
+            for p in adds:
+                label_of[p] = ret_label[p]
+                pid_of[ret_label[p]] = p
+            qb_ids = sorted([p for p in roster + adds if stv.players.loc[p, "group"] == "QB" and p not in outs],
+                            key=lambda p: -stv.players.loc[p, "n_db"])   # default = most recent-weighted dropbacks
+            qb_labels = [label_of[p] for p in qb_ids]
             if qb_labels:
                 qb = pid_of[st.selectbox("Starting QB", qb_labels, key=f"qb_{team}")]
+                # the other QBs don't play: their designed-run share moves to the starter
+                outs = outs + [p for p in qb_ids if p != qb]
             else:
                 qb = None
                 st.warning("No active QB on the recent roster — passing yards will not be priced.")
             imp = D.implied_points(spread, total, home)
             st.caption(f"Implied points: {imp:.1f}")
             team_inputs[team] = M.GameInputs(team, "", imp, spread if home else -spread,
-                                             0.0 if roof in W.INDOOR else wind, tuple(outs), qb)
+                                             0.0 if roof in W.INDOOR else wind, tuple(outs), qb, tuple(adds))
 
     if st.button("Simulate game", type="primary"):
         st.session_state["sim"] = {t: M.simulate_team(stv, gi, n=n_sims, seed=11 + i)
