@@ -515,10 +515,12 @@ def _beta_draws(rng, a, b, n):
 
 
 def _group_scaled_shares(rng, P: pd.DataFrame, kind: str, team_shares: dict, n: int,
-                         psi: dict | None = None):
+                         psi: dict | None = None, present: np.ndarray | None = None):
     """Per-sim share draws, rescaled so each position group keeps its team-level share.
 
     Removing an OUT player therefore redistributes his volume within his position group.
+    `present` (players x sims, bool) is False where a player sits in that sim (availability
+    model): his volume moves to his position group in that sim only.
     Returns (shares[players, sims], other[sims]).
     """
     draws = _beta_draws(rng, P[f"a_{kind}"], P[f"b_{kind}"], n)   # long-run shares (posterior)
@@ -538,11 +540,29 @@ def _group_scaled_shares(rng, P: pd.DataFrame, kind: str, team_shares: dict, n: 
             alpha = np.maximum(psi.get((kind, grp), 1e4) * within, 1e-3)
             g = rng.gamma(alpha)
             within = g / np.maximum(g.sum(axis=0), 1e-12)
+        if present is not None:
+            within = within * present[idx]
+            within = within / np.maximum(within.sum(axis=0), 1e-12)
         out[idx] = within * target
     tot = out.sum(axis=0)
     scale = np.where(tot > 0.995, 0.995 / tot, 1.0)
     out = out * scale
     return out, 1.0 - out.sum(axis=0)
+
+
+def own_samples(d: dict, key: str) -> np.ndarray | None:
+    """A player's own stat samples, restricted to the sims in which he plays.
+
+    His teammates' arrays already include the volume he leaves behind when he sits; his own
+    props are priced conditional on playing (a sportsbook voids a prop on a scratched player).
+    """
+    x = d.get(key)
+    if x is None:
+        return None
+    m = d.get("played")
+    if m is None or m.all() or not m.any():
+        return x
+    return x[m]
 
 
 @dataclass
@@ -555,6 +575,7 @@ class GameInputs:
     outs: tuple = ()            # player_ids ruled out
     qb: str | None = None       # starting QB player_id override
     adds: tuple = ()            # players returning from injury (not on the recent-snaps roster)
+    avail: dict = field(default_factory=dict)   # player_id -> P(plays); missing = 1 (QBs always 1)
 
 
 def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> dict:
@@ -605,9 +626,16 @@ def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> d
     f_rush = (rng.lognormal(-sr ** 2 / 2, sr, n) if sr > 0 else np.ones(n)) * m_rush
     f_rec = (rng.lognormal(-sc ** 2 / 2, sc, n) if sc > 0 else np.ones(n)) * wind_factor * m_rec
 
+    # ---- availability: each non-QB plays in a sim with his estimated probability (default 1)
+    p_play = np.array([1.0 if (pid == qb_id or R.loc[pid, "group"] == "QB")
+                       else float(np.clip(gi.avail.get(pid, 1.0), 0.0, 1.0)) for pid in R.index])
+    present = rng.random((len(R), n)) < p_play[:, None] if (p_play < 1).any() else None
+
     # ---- allocation
-    R_car, other_car = _group_scaled_shares(rng, R, "car", st.team_group_share.get((gi.team, "car"), {}), n, st.psi)
-    R_tgt, other_tgt = _group_scaled_shares(rng, R, "tgt", st.team_group_share.get((gi.team, "tgt"), {}), n, st.psi)
+    R_car, other_car = _group_scaled_shares(rng, R, "car", st.team_group_share.get((gi.team, "car"), {}), n,
+                                            st.psi, present)
+    R_tgt, other_tgt = _group_scaled_shares(rng, R, "tgt", st.team_group_share.get((gi.team, "tgt"), {}), n,
+                                            st.psi, present)
 
     carries = rng.multinomial(runs, np.vstack([R_car, other_car]).T)[:, :-1].T
     targets = rng.multinomial(attempts, np.vstack([R_tgt, other_tgt]).T)[:, :-1].T
@@ -641,7 +669,9 @@ def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> d
                                   st.k_yards.get((grp, "catch"), 200), st.league_pool_cdf.get(kc)) * f_rec
         total_rec_yds += rec_yds
         out[pid] = dict(rush_att=rush_att, rush_yds=rush_yds, targets=targets[i],
-                        receptions=catches[i], rec_yds=rec_yds, tds=tds[i])
+                        receptions=catches[i], rec_yds=rec_yds, tds=tds[i],
+                        played=present[i] if present is not None else np.ones(n, bool),
+                        p_play=float(p_play[i]))
 
     # passing yards = all receiving yards, incl. targets to players outside the modeled roster
     other_tg = attempts - targets.sum(axis=0)

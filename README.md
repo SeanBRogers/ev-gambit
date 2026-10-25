@@ -24,7 +24,8 @@ This-game shares are drawn Dirichlet around long-run shares so estimated game-to
 volatility survives the position-group constraint. A per-market logistic calibration
 (fit on all graded 2025 thresholds; slopes 0.91–1.03, i.e. small corrections) is validated
 on 2026. Players on IR/PUP/NFI, suspended, exempt or inactive are removed by default from the
-weekly roster status, and the market total also scales yards per catch (v3.1, below).
+weekly roster status, and the market total also scales yards per catch (v3.1, below). Before
+inactives, every other player plays in each simulation with an estimated probability (v3.2, below).
 
 ## Does it work?
 
@@ -74,17 +75,72 @@ shares within 0.1 pt league-wide; depth-WR inflation is ~0.8 pt of team targets,
 role priors to rank 6 did not help.
 
 `results/v31_vs_v3.csv`: as shipped (live information, calibrated; calibration refit on 2025),
-2026 holdout weeks 1–6, Brier v3.1 − v3 with 95% cluster-bootstrap CI, contested thresholds:
+2026 holdout weeks 1–6, Brier v3.1 − v3 with 95% cluster-bootstrap CI, contested thresholds.
 
-| Market | Brier diff | Bias on contested lines, v3 → v3.1 |
+**Correction (v3.2):** the first version of this table was leaky. Its "live" mode read the target
+week's roster status, which includes the game-day inactive list (`INA`): nflverse shows no INA
+rows for games not yet played (Week 7 2026: 0 for the 10 unplayed teams, 6–7 per finished team),
+so that list is not available when the injury report is. Re-run without it:
+
+| Market | Brier diff (leak-free) | First published | Bias on contested lines, v3 → v3.1 |
+|---|---|---|---|
+| Rushing yards | −0.0044 [−0.012, +0.003] | −0.0105 [−0.021, −0.001] | −1.8 → −0.1 pts |
+| Receptions | −0.0043 [−0.008, −0.001] | −0.0057 | −9.5 → −6.8 pts |
+| Receiving yards | −0.0054 [−0.010, −0.001] | −0.0050 | −8.4 → −5.7 pts |
+| Passing yards | −0.0044 [−0.008, −0.001] | −0.0043 | −6.0 → −4.9 pts |
+| Anytime TD | −0.0006 [−0.002, +0.001] | −0.0009 | −1.9 → −1.0 pts |
+
+The rushing improvement is no longer significant. The other markets hold. 2025 points the same
+way in pass yards and receptions (significant) and receiving yards (not significant). It is flat
+in rushing yards and TDs. Still probability quality, not profit.
+
+## v3.2 (Oct 25, 2026) — who actually plays
+
+Before kickoff the app knows the injury report and weekly roster status, but not the game-day
+inactive list. v3.1 assumed everyone not ruled out plays. Among non-QB players on the simulated
+roster (2025 and 2026 Weeks 1–6, pre-kickoff information only), the share who took an offensive
+snap was:
+
+| Group | 2025 | 2026 |
 |---|---|---|
-| Rushing yards | −0.0105 [−0.021, −0.001] | −1.8 → +1.5 pts |
-| Receptions | −0.0057 [−0.010, −0.001] | −9.5 → −5.6 pts |
-| Receiving yards | −0.0050 [−0.012, +0.002] | −8.4 → −4.5 pts |
-| Passing yards | −0.0043 [−0.008, −0.001] | −6.0 → −4.8 pts |
-| Anytime TD | −0.0009 [−0.003, +0.001] | −1.9 → −0.6 pts |
+| Listed Questionable | 66% | 63% |
+| Not listed, missed the team's previous game | 37% | 36% |
+| Not listed, played the previous game | 94% | 92% |
 
-Same direction in every market on 2025 (17 weeks). Still probability quality, not profit.
+The second group (healthy scratches, players coming back, depth players rotated out) left more
+target share on the table than the Questionable group did. Fix (`gambit/availability.py`): two
+logistic regressions, fit only on team-weeks before the slate.
+- Questionable players: practice status plus recent snap share.
+- Everyone else not ruled out: practice status, played the previous game, recent snap share, and
+  their interaction.
+
+Each player plays or sits in each simulation. When he sits, his volume goes to his position group.
+His own props are priced on the simulations in which he plays.
+
+Out of sample (fit before each season, scored on it), P(plays) Brier is 0.075 vs 0.128 for
+"everyone plays" in 2025, and 0.063 vs 0.096 in 2026. One pooled model was tried first. On
+Questionable players it was worse than a constant rate (0.238 vs 0.224). It also over-stated how
+often a Questionable starter plays, because its snap-share slope was set by depth players.
+Props scored the same under either model (all differences within ±0.001).
+
+`results/v32_vs_v31.csv`: Brier v3.2 − v3.1, same calibration, live information, contested
+thresholds, 95% cluster-bootstrap CI.
+
+| Market | 2026 holdout | 2025 | Bias 2026, v3.1 → v3.2 |
+|---|---|---|---|
+| Receptions | −0.0045 [−0.007, −0.002] | −0.0024 [−0.004, −0.001] | −6.8 → −3.4 pts |
+| Rushing yards | −0.0021 [−0.009, +0.005] | −0.0046 [−0.009, −0.001] | −0.1 → +4.5 pts |
+| Receiving yards | −0.0010 [−0.004, +0.002] | −0.0008 [−0.003, +0.001] | −5.7 → −2.9 pts |
+| Passing yards | −0.0002 [−0.001, +0.001] | +0.0001 [−0.000, +0.001] | −4.7 → −4.6 pts |
+| Anytime TD | +0.0003 [−0.001, +0.001] | −0.0003 [−0.001, +0.000] | −0.9 → +0.3 pts |
+
+Receptions improve in both seasons. Rushing yards improve in 2025 only. The rest is unchanged.
+Calibration was **not** refit: refitting it on v3.2's 2025 output was marginally worse on the
+2026 holdout in four of five markets. Against v3 (`results/v32_vs_v3.csv`), 2026 receptions are
+−0.0088 [−0.014, −0.004] and passing yards −0.0045 [−0.008, −0.001].
+
+What this does **not** know: contract settlement when a player sits. The Price tab asks. A
+sportsbook voids the prop. Whether DraftKings Predictions resolves it NO is not verified here.
 
 ## Run it
 
@@ -93,18 +149,23 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 python -m pytest -q tests
 python -m gambit.backtest 2026 1 6          # walk-forward backtest for a season/week range (snap-based actives)
-python -m gambit.backtest 2026 1 6 report+status   # same, using only pre-kickoff information
+python -m gambit.backtest 2026 1 6 report+status         # pre-kickoff information, everyone not ruled out plays (v3.1)
+python -m gambit.backtest 2026 1 6 report+status+avail   # pre-kickoff information + availability model (v3.2, as shipped)
 python -m gambit.calibrate backtest_2025_2_18.parquet   # refit calibration (do this at season boundaries)
 ```
 
 ## Known limits (honest list)
 
-- **Live receiving markets still run low**: with pre-kickoff information, contested receptions
-  and receiving-yard thresholds are under-predicted by ~5 pts (vs ~1–2 pts when actives are
-  known). The remaining gap is who actually plays: Questionable players are treated as
-  playing, and practice-squad elevations / surprise starters are missed. Next fix candidate.
-- 2026 rushing is over-predicted when actives are known (+7 pts on contested lines); recency
+- **Live receiving markets still run a little low**: 2026 contested receptions −3.4 pts and
+  receiving yards −2.9 pts after v3.2. Practice-squad elevations and players with no recent snaps
+  are still invisible. A sitting player's volume all goes to modeled teammates in his group,
+  which over-feeds RBs: 2026 contested rushing is now +4.5 pts.
+- 2026 rushing is over-predicted when actives are known (+6 pts on contested lines); recency
   weighting only partly corrects it.
+- Availability uses each player's last 3 *team* games. In Weeks 1–3 that window reaches into
+  last season.
+- Before this week's nflverse roster rows are published, last week's game-day inactives carry
+  forward as OUT (89% of them did not play the next week either).
 - QB quality is still priced only through the market total and his receivers' history — no
   QB-specific completion or depth effect.
 - Near the median, receiving-yard and rush-yard distributions remain somewhat too peaked
@@ -114,7 +175,8 @@ python -m gambit.calibrate backtest_2025_2_18.parquet   # refit calibration (do 
 - Positions are taken from the latest available week (negligible leakage in backtests).
 - Weather: only wind enters; temperature/precipitation are displayed, not modeled.
 - The default backtest uses actual game wind and snap-based actives. Snap-based actives were
-  **not** mild optimism: they hid the IR bug. Use `info="report+status"` to grade live behavior.
+  **not** mild optimism: they hid the IR bug. Use `info="report+status+avail"` to grade live
+  behavior. Pre-kickoff modes never read the target week's game-day inactive list.
 - Graded rows are selected by pre-game box-score volume (last 3 games), never by model output.
 - Open-Meteo rate-limits shared IPs (Streamlit Cloud included): when the forecast fails, type
   the wind in. Retractable-roof venues default to closed (wind 0) until the roof is announced.

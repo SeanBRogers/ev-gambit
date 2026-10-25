@@ -109,3 +109,75 @@ def test_efficiency_multiplier_direction():
     d = float(np.clip(19.75 - st.team_implied_norm["KC"], -st.params.eff_clip, st.params.eff_clip))
     assert np.exp(st.eff_implied["catch"] * d) < 1.0
     assert np.exp(st.eff_implied["rush"] * d) == 1.0
+
+
+def test_questionable_volume_moves_to_group_only_when_he_sits():
+    import pandas as pd
+    from gambit.model import _group_scaled_shares
+    P = pd.DataFrame({"a_tgt": [30.0, 20.0, 10.0, 15.0], "b_tgt": [70.0, 80.0, 90.0, 85.0],
+                      "group": ["WR", "WR", "WR", "TE"]}, index=list("abcd"))
+    n = 4000
+    present = np.ones((4, n), bool)
+    present[0, : n // 2] = False                     # WR "a" sits in the first half of sims
+    rng = np.random.default_rng(0)
+    out, other = _group_scaled_shares(rng, P, "tgt", {"WR": 0.6, "TE": 0.2}, n, None, present)
+    assert np.all(out[0, : n // 2] == 0)            # zero volume when he sits
+    np.testing.assert_allclose(out[:3].sum(axis=0), 0.6, atol=1e-9)   # WR group keeps its share every sim
+    np.testing.assert_allclose(out[3], 0.2, atol=1e-9)                # other groups untouched
+    assert out[1, : n // 2].mean() > out[1, n // 2:].mean() * 1.3     # teammates absorb it
+
+
+def test_own_samples_conditions_on_playing():
+    from gambit.model import own_samples
+    d = {"rec_yds": np.array([0.0, 50.0, 0.0, 70.0]), "played": np.array([False, True, False, True])}
+    np.testing.assert_array_equal(own_samples(d, "rec_yds"), [50.0, 70.0])
+    assert own_samples({"x": np.arange(3)}, "x").tolist() == [0, 1, 2]
+    assert own_samples(d, "missing") is None
+
+
+def test_availability_fit_orders_listing_practice_and_prev_game():
+    import pandas as pd
+    from gambit import availability as A
+    rng = np.random.default_rng(1)
+    full, lim, dnp = ("Full Participation in Practice", "Limited Participation in Practice",
+                      "Did Not Participate In Practice")
+    rows = []
+    for i in range(6000):
+        q = rng.random() < 0.3
+        prac = rng.choice([full, lim, dnp]) if q else None
+        prev = rng.random() < 0.8
+        role = rng.uniform(0.05, 1.0)
+        z = -0.5 + 5 * role + 1.5 * prev - (1.3 if q else 0) - {full: 0, lim: 0.4, dnp: 1.5, None: 0}[prac]
+        rows.append(dict(report_status="Questionable" if q else None, practice_status=prac, role=role,
+                         played_prev=prev, y=rng.random() < 1 / (1 + np.exp(-z)), t=40510))
+    av = A.fit(pd.DataFrame(rows))
+    probe = pd.DataFrame(dict(report_status=["Questionable"] * 3 + [None, None],
+                              practice_status=[full, lim, dnp, None, None], role=[0.7] * 5,
+                              played_prev=[True, True, True, True, False]))
+    p = av.prob(probe)
+    assert p[0] > p[1] > p[2]          # Full > Limited > DNP
+    assert p[3] > p[0]                 # unlisted > Questionable
+    assert p[3] > p[4]                 # played last game > missed it
+    # walk-forward: rows at or after the cutoff week are not used
+    assert A.fit_before(pd.DataFrame(rows), (2025, 10)).n == 0
+    assert A.fit_before(pd.DataFrame(rows), (2025, 11)).n == 6000
+
+
+def test_window_features_counts_missed_games_as_zero():
+    import pandas as pd
+    from gambit import availability as A
+    snaps = pd.DataFrame(dict(player_id=["a", "a", "a", "b"], posteam="KC", season=2025,
+                              week=[3, 4, 5, 3], offense_pct=[0.9, 0.9, 0.9, 0.6]))
+    f = A.window_features(snaps, "KC", 2025 * 20 + 6)
+    assert f.loc["a", "role"] == pytest.approx(0.9) and f.loc["a", "played_prev"]
+    assert f.loc["b", "role"] == pytest.approx(0.2) and not f.loc["b", "played_prev"]
+
+
+def test_pregame_status_ignores_target_week_game_day_inactives():
+    import pandas as pd
+    from gambit.data import unavailable_ids
+    rs = pd.DataFrame(dict(gsis_id=["x", "x", "y", "y", "z"], week=[5, 6, 5, 6, 6],
+                           status=["INA", "INA", "RES", "INA", "RES"], team="KC"))
+    assert set(unavailable_ids(rs, 6)) == {"x", "y", "z"}            # after the inactive list is out
+    # before kickoff: Week 6 INA is unknown; an older status must not stand in for it
+    assert set(unavailable_ids(rs, 6, pregame=True)) == {"z"}

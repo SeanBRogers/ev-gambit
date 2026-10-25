@@ -143,8 +143,18 @@ def load_injuries(season: int) -> pd.DataFrame:
     try:
         df = _cached(f"injuries_{season}", lambda: nfl.load_injuries([season]).to_pandas(), max_age_hours=3)
     except Exception:
-        return pd.DataFrame(columns=["week", "team", "gsis_id", "full_name", "report_status"])
-    return df[["week", "team", "gsis_id", "full_name", "position", "report_status"]]
+        return pd.DataFrame(columns=["season", "week", "team", "gsis_id", "full_name", "position",
+                                     "report_status", "practice_status"])
+    if "game_type" in df:
+        df = df[df["game_type"] == "REG"]
+    return df[["season", "week", "team", "gsis_id", "full_name", "position", "report_status", "practice_status"]]
+
+
+def load_injuries_hist(seasons: list[int]) -> pd.DataFrame:
+    """Injury reports for several seasons (regular season), for fitting P(plays | Questionable)."""
+    frames = [load_injuries(s) for s in seasons]
+    df = pd.concat([f for f in frames if len(f)], ignore_index=True) if any(len(f) for f in frames) else frames[0]
+    return df.dropna(subset=["gsis_id"])
 
 
 # Weekly roster status codes that mean "cannot play this week". The weekly injury report
@@ -169,18 +179,30 @@ def load_roster_status(season: int) -> pd.DataFrame:
     return df.dropna(subset=["gsis_id"])
 
 
-def unavailable_ids(roster_status: pd.DataFrame, week: int) -> dict:
+def unavailable_ids(roster_status: pd.DataFrame, week: int, pregame: bool = False) -> dict:
     """gsis_id -> status for players who cannot play in `week`.
 
     Uses that week's roster snapshot; if it isn't published yet, the latest earlier week
     (a player on IR last week is still on IR unless designated to return — the user can
     add him back on the Slate tab).
+
+    pregame=True drops `week`'s own INA rows. INA is the game-day inactive list: nflverse
+    shows none for games not yet played (checked Week 7 2026: 0 INA for the 10 unplayed
+    teams, 6-7 per finished team), so a backtest that reads the target week's INA is using
+    information published ~90 minutes before kickoff, after the injury report.
     """
     rs = roster_status[roster_status["week"] <= week]
+    if pregame:
+        rs = rs[~((rs["week"] == week) & (rs["status"] == "INA"))]
     if rs.empty:
         return {}
     last_wk = rs.groupby("gsis_id")["week"].transform("max")
     latest = rs[rs["week"] == last_wk]
+    if pregame:
+        # his target-week row was INA (game-day): he was on the active roster before kickoff,
+        # so an earlier week's status must not stand in for it
+        ina_now = set(roster_status.loc[(roster_status["week"] == week) & (roster_status["status"] == "INA"), "gsis_id"])
+        latest = latest[~latest["gsis_id"].isin(ina_now)]
     # a traded player can have two rows that week (TRD on the old team, ACT on the new one)
     active = set(latest.loc[latest["status"] == "ACT", "gsis_id"])
     bad = latest[latest["status"].isin(UNAVAILABLE_STATUS) & ~latest["gsis_id"].isin(active)]
