@@ -59,7 +59,14 @@ def _old_prob(mean_pg, gp, thr, market, td_rate=None):
     return shrink(p, gp)
 
 
-def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | None = None):
+def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | None = None,
+        info: str = "oracle"):
+    """info = which players the simulation removes before kickoff:
+      oracle         -> anyone without an offensive snap in the target game (v3 default; optimistic)
+      report         -> that week's Out/Doubtful injury report only (what v3's app actually did live)
+      report+status  -> report plus weekly roster status (IR/PUP/NFI/suspended/exempt/inactive)
+    Grading is identical in every mode: only players who actually played are graded.
+    """
     seasons = [season - 2, season - 1, season] if season >= 2026 else [season - 1, season]
     pbp = D.load_pbp(seasons, refresh_current=False)
     pos = D.load_positions(seasons)
@@ -69,6 +76,7 @@ def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | No
     stats["t"] = stats["season"] * 20 + stats["week"]
     inj = D.load_injuries(season)
     snaps = D.load_snaps(seasons)
+    rstat = D.load_roster_status(season) if info == "report+status" else None
     rows = []
     for week in range(w0, w1 + 1):
         t0 = time.time()
@@ -78,13 +86,26 @@ def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | No
         hist = stats[stats["t"] < season * 20 + week]
         # Actives are public ~90 min before kickoff; proxy = had an offensive snap.
         played = set(snaps[(snaps["season"] == season) & (snaps["week"] == week)]["player_id"])
+        wk_out = set(inj.loc[(inj["week"] == week) & inj["report_status"].isin(["Out", "Doubtful"]), "gsis_id"])
+        if rstat is not None:
+            wk_out |= set(D.unavailable_ids(rstat, week))
         for _, g in games.iterrows():
             outdoor = g["roof"] in ("outdoors", "open")
             wind = float(g["wind"]) if outdoor and pd.notna(g["wind"]) else 0.0
             for team, home in [(g["home_team"], True), (g["away_team"], False)]:
                 imp = D.implied_points(g["spread_line"], g["total_line"], home)
                 ts = g["spread_line"] if home else -g["spread_line"]
-                team_outs = tuple(p for p in st.roster.get(team, []) if p not in played)
+                if info == "oracle":
+                    team_outs = tuple(p for p in st.roster.get(team, []) if p not in played)
+                else:
+                    team_outs = [p for p in st.roster.get(team, []) if p in wk_out]
+                    # mirror the app: only the default starter (most weighted dropbacks) plays QB
+                    qbs = [p for p in st.roster.get(team, []) if p not in team_outs
+                           and st.players.loc[p, "group"] == "QB"]
+                    if qbs:
+                        starter = max(qbs, key=lambda p: st.players.loc[p, "n_db"])
+                        team_outs += [p for p in qbs if p != starter]
+                    team_outs = tuple(team_outs)
                 sim = M.simulate_team(st, M.GameInputs(team, "", imp, ts, wind, team_outs),
                                       n=n_sims, seed=week * 1000 + sum(map(ord, team)))
                 if "error" in sim.get("meta", {}):
@@ -187,7 +208,11 @@ def reliability(df: pd.DataFrame, col: str = "p_model", bins: int = 10) -> pd.Da
 
 if __name__ == "__main__":
     season, w0, w1 = (int(x) for x in sys.argv[1:4])
-    res = run(season, w0, w1)
-    res.to_parquet(f"backtest_{season}_{w0}_{w1}.parquet", index=False)
+    info = sys.argv[4] if len(sys.argv) > 4 else "oracle"
+    if info not in ("oracle", "report", "report+status"):
+        raise SystemExit("info must be oracle | report | report+status")
+    res = run(season, w0, w1, info=info)
+    suffix = "" if info == "oracle" else "_" + info.replace("+", "_")
+    res.to_parquet(f"backtest_{season}_{w0}_{w1}{suffix}.parquet", index=False)
     pd.set_option("display.width", 250)
     print(score(res).round(4).to_string(index=False))

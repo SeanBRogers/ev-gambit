@@ -41,6 +41,19 @@ class Params:
     lookback_active: int = 3     # team games used to define the active roster
     min_k: float = 2.0
     max_k: float = 2000.0
+    # Market-implied points move yards per play, not just play count. Estimated within
+    # team-season (the matchup part a player's own history cannot carry). v3 used the total
+    # only for plays (+0.3/pt) and TDs, which compressed every QB toward ~200-250 yards.
+    implied_eff: bool = True
+    # Pools that get the adjustment. Rushing is estimated (+1.4%/pt, t~5 at team level) but did
+    # not improve RB rushing-yard props out of sample (2025: -0.0002 Brier, CI spans 0; 2026
+    # holdout: +0.0018, CI spans 0), so only the passing game uses it.
+    implied_eff_pools: tuple = ("catch",)
+    # League yardage pool sampled with the same recency weights as everything else, so the
+    # current season's environment (2026 rush yds/carry 4.04 vs 4.28-4.33 in 2024-25) counts.
+    league_recency: bool = True
+    max_role_rank: int = 4       # role priors for ranks 1..max_role_rank; deeper players share the last
+    eff_clip: float = 10.0       # cap on |implied - team norm| in points
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +135,10 @@ class State:
     roster: dict = field(default_factory=dict)             # team -> list of player_ids (active)
     psi: dict = field(default_factory=dict)                # (kind, group) -> game-to-game share concentration
     eff_sigma: dict = field(default_factory=dict)          # pool -> sd of log team game-efficiency factor
+    eff_implied: dict = field(default_factory=dict)        # pool -> d log(yards/play) per implied point
+    team_implied_norm: dict = field(default_factory=dict)  # team -> recency-weighted mean implied points
+    league_implied: float = 22.0
+    league_pool_cdf: dict = field(default_factory=dict)    # (group, pool) -> cumulative recency weights
     diagnostics: dict = field(default_factory=dict)
 
 
@@ -276,8 +293,9 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
     P["on_roster"] = P.index.isin(on_roster)
     for share, c, n in [("car", "c_car", "n_car"), ("tgt", "c_tgt", "n_tgt")]:
         x = P[c] / P[n].replace(0, np.nan)
+        max_r = int(params.max_role_rank)
         rk = (x.where(P["on_roster"]).groupby([P["team"], P["group"]])
-              .rank(ascending=False, method="first").clip(upper=4))
+              .rank(ascending=False, method="first").clip(upper=max_r))
         P[f"rank_{share}"] = rk
         P[f"m_{share}"] = np.nan
         P[f"k_{share}"] = np.nan
@@ -288,11 +306,16 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
             m_grp = float(np.clip(P.loc[gmask, c].sum() / max(P.loc[gmask, n].sum(), 1e-9), 1e-4, 0.9))
             P.loc[gmask, f"m_{share}"] = m_grp
             role_means = {}
-            for r_ in [1, 2, 3, 4]:
+            prev = None
+            for r_ in range(1, max_r + 1):
                 rm = gmask & (P[f"rank_{share}"] == r_)
                 if rm.sum() >= 5 and P.loc[rm, n].sum() > 0:
                     role_means[r_] = float(np.clip(P.loc[rm, c].sum() / P.loc[rm, n].sum(), 1e-4, 0.9))
-                    P.loc[rm, f"m_{share}"] = role_means[r_]
+                    prev = role_means[r_]
+                if prev is not None and rm.any():
+                    # a thin rank inherits the next-shallower role's prior, never the (much larger)
+                    # position-group mean
+                    P.loc[rm, f"m_{share}"] = role_means.get(r_, prev)
             # MoM needs binomial-scale counts: use unweighted totals, not decay-weighted sums
             rc, rn = {"car": ("carries", "designed_runs"), "tgt": ("targets", "attempts")}[share]
             rr = raw.reindex(P.index)
@@ -399,6 +422,34 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
         st.eff_sigma[pool] = sig
         st.diagnostics["eff_sigma"][pool] = round(sig, 4)
 
+    # Efficiency vs market-implied points. Estimated WITHIN team-season (team-season fixed
+    # effects) so the coefficient is the matchup-driven part: a player's own yardage pool
+    # already reflects his team's usual environment. Wind is a control because it is applied
+    # separately. Pooled 2024-26 estimate ~ +1.5%/pt for yds/carry and yds/catch, t ~ 3.
+    st.league_implied = float(np.average(tg["implied"], weights=tg["w"]))
+    norm = tg.groupby("posteam").apply(lambda d: np.average(d["implied"], weights=d["w"]), include_groups=False)
+    st.team_implied_norm = {t: float(v) for t, v in norm.items()}
+    st.diagnostics["eff_implied"] = {}
+    tgi = tg.set_index(["game_id", "posteam"])[["implied", "wind_eff", "season"]]
+    for pool, d in eff.groupby("pool"):
+        gm = d.groupby(["game_id", "posteam"])["yards"].agg(["mean", "size"]).join(tgi, how="inner").reset_index()
+        gm = gm[(gm["size"] >= 5) & (gm["mean"] > 0)]
+        if len(gm) < 50 or not params.implied_eff:
+            st.eff_implied[pool] = 0.0
+            continue
+        use_pool = pool in params.implied_eff_pools
+        gm["ts"] = gm["posteam"] + gm["season"].astype(str)
+        gm["ly"] = np.log(gm["mean"])
+        for col in ["ly", "implied", "wind_eff"]:
+            gm[col + "_dm"] = gm[col] - gm.groupby("ts")[col].transform("mean")
+        bx, sex, *_ = _wls(np.column_stack([gm["implied_dm"], gm["wind_eff_dm"]]), gm["ly_dm"].to_numpy(float),
+                           gm["size"].to_numpy(float))
+        slope = float(bx[0])
+        # keep only a slope that the data distinguish from zero (|t| >= 2); otherwise 0
+        st.eff_implied[pool] = slope if (use_pool and abs(slope) >= 2 * float(sex[0])) else 0.0
+        st.diagnostics["eff_implied"][pool] = dict(per_point=round(slope, 4), se=round(float(sex[0]), 4),
+                                                   used=round(st.eff_implied[pool], 4))
+
     # ---------------- team position-group shares ----------------
     for team, d in pg.groupby("posteam"):
         # one denominator per game (not per player row)
@@ -416,6 +467,9 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
     yo = yo[(yo["pool"] == "rush") | (yo["caught"] == 1)]
     for (grp, pool), d in yo.groupby(["group", "pool"]):
         st.league_pools[(grp, pool)] = d["yards"].to_numpy(float)
+        if params.league_recency:
+            cw = np.cumsum(d["w"].to_numpy(float))
+            st.league_pool_cdf[(grp, pool)] = cw / cw[-1]
         by_player = [g["yards"].to_numpy(float) for _, g in d.groupby("player_id")]
         st.k_yards[(grp, pool)] = _eb_mean_strength(by_player, params.min_k, params.max_k)
     st.diagnostics["k_yards"] = {f"{g}_{p}": round(k, 1) for (g, p), k in st.k_yards.items()}
@@ -429,23 +483,28 @@ def fit_state(pbp: pd.DataFrame, positions: pd.DataFrame, cutoff: tuple[int, int
 # Simulation
 # ---------------------------------------------------------------------------
 
-def _bootstrap_sums(rng, counts, own, own_w, league, k):
+def _league_draws(rng, league, n, cdf=None):
+    """n draws from the league pool: uniform, or recency-weighted via its cumulative weights."""
+    if cdf is None:
+        return league[rng.integers(0, len(league), n)]
+    return league[np.minimum(np.searchsorted(cdf, rng.random(n), side="right"), len(league) - 1)]
+
+
+def _bootstrap_sums(rng, counts, own, own_w, league, k, league_cdf=None):
     """Sum of `counts[s]` per-play yards for each sim s, drawn from a mixture:
     own plays (recency-weighted) with prob n_eff/(n_eff+k), else league pool."""
     total = int(counts.sum())
     if total == 0:
         return np.zeros(len(counts))
     seg = np.repeat(np.arange(len(counts)), counts)
+    draws = _league_draws(rng, league, total, league_cdf)
     if own is not None and len(own) > 0:
         n_eff = float(own_w.sum())
         p_own = n_eff / (n_eff + k)
         use_own = rng.random(total) < p_own
-        draws = league[rng.integers(0, len(league), total)]
         n_own = int(use_own.sum())
         if n_own:
             draws[use_own] = own[rng.choice(len(own), n_own, p=own_w / own_w.sum())]
-    else:
-        draws = league[rng.integers(0, len(league), total)]
     return np.bincount(seg, weights=draws, minlength=len(counts))
 
 
@@ -538,8 +597,13 @@ def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> d
 
     wind_factor = 1.0 + st.wind_ypa_slope * gi.wind_mph / st.league_ypa
     sr, sc = st.eff_sigma.get("rush", 0.0), st.eff_sigma.get("catch", 0.0)
-    f_rush = rng.lognormal(-sr ** 2 / 2, sr, n) if sr > 0 else np.ones(n)
-    f_rec = (rng.lognormal(-sc ** 2 / 2, sc, n) if sc > 0 else np.ones(n)) * wind_factor
+    # this matchup vs the team's usual market environment
+    d_imp = float(np.clip(gi.implied - st.team_implied_norm.get(gi.team, st.league_implied),
+                          -st.params.eff_clip, st.params.eff_clip))
+    m_rush = float(np.exp(st.eff_implied.get("rush", 0.0) * d_imp))
+    m_rec = float(np.exp(st.eff_implied.get("catch", 0.0) * d_imp))
+    f_rush = (rng.lognormal(-sr ** 2 / 2, sr, n) if sr > 0 else np.ones(n)) * m_rush
+    f_rec = (rng.lognormal(-sc ** 2 / 2, sc, n) if sc > 0 else np.ones(n)) * wind_factor * m_rec
 
     # ---- allocation
     R_car, other_car = _group_scaled_shares(rng, R, "car", st.team_group_share.get((gi.team, "car"), {}), n, st.psi)
@@ -566,15 +630,15 @@ def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> d
     total_rec_yds = np.zeros(n)
     for i, pid in enumerate(R.index):
         grp = R.loc[pid, "group"]
-        lg_rush = st.league_pools.get((grp, "rush"), st.league_pools.get(("RB", "rush")))
-        lg_catch = st.league_pools.get((grp, "catch"), st.league_pools.get(("WR", "catch")))
+        kr = (grp, "rush") if (grp, "rush") in st.league_pools else ("RB", "rush")
+        kc = (grp, "catch") if (grp, "catch") in st.league_pools else ("WR", "catch")
         own_r = st.pools.get((pid, "rush"), (None, None))
         own_c = st.pools.get((pid, "catch"), (None, None))
         rush_att = carries[i] + (scrambles if pid == qb_id else 0)
-        rush_yds = _bootstrap_sums(rng, rush_att, own_r[0], own_r[1], lg_rush,
-                                   st.k_yards.get((grp, "rush"), 200)) * f_rush
-        rec_yds = _bootstrap_sums(rng, catches[i], own_c[0], own_c[1], lg_catch,
-                                  st.k_yards.get((grp, "catch"), 200)) * f_rec
+        rush_yds = _bootstrap_sums(rng, rush_att, own_r[0], own_r[1], st.league_pools[kr],
+                                   st.k_yards.get((grp, "rush"), 200), st.league_pool_cdf.get(kr)) * f_rush
+        rec_yds = _bootstrap_sums(rng, catches[i], own_c[0], own_c[1], st.league_pools[kc],
+                                  st.k_yards.get((grp, "catch"), 200), st.league_pool_cdf.get(kc)) * f_rec
         total_rec_yds += rec_yds
         out[pid] = dict(rush_att=rush_att, rush_yds=rush_yds, targets=targets[i],
                         receptions=catches[i], rec_yds=rec_yds, tds=tds[i])
@@ -584,7 +648,8 @@ def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> d
     # attempts without a receiver (throwaways, spikes) complete 0%; the rest go to unmodeled players
     no_recv = np.minimum(rng.binomial(attempts, st.no_receiver_rate), other_tg)
     other_catch = rng.binomial(other_tg - no_recv, st.league_catch)
-    other_yds = _bootstrap_sums(rng, other_catch, None, None, st.league_pools[("WR", "catch")], 1) * f_rec
+    other_yds = _bootstrap_sums(rng, other_catch, None, None, st.league_pools[("WR", "catch")], 1,
+                                st.league_pool_cdf.get(("WR", "catch"))) * f_rec
     if qb_id is not None:
         out[qb_id]["pass_att"] = attempts
         out[qb_id]["pass_yds"] = total_rec_yds + other_yds
@@ -595,5 +660,6 @@ def simulate_team(st: State, gi: GameInputs, n: int = 10000, seed: int = 7) -> d
                 out[pid][key] = np.rint(out[pid][key])
     out["meta"] = dict(team=gi.team, qb=qb_id, plays_mu=float(plays_mu),
                        pass_share_mean=float(q.mean()), td_lambda=float(lam), td_kappa=float(kappa),
-                       wind_factor=float(wind_factor), roster=list(R.index))
+                       wind_factor=float(wind_factor), roster=list(R.index),
+                       implied_vs_norm=d_imp, eff_mult_rush=m_rush, eff_mult_rec=m_rec)
     return out

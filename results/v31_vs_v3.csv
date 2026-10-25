@@ -1,0 +1,37 @@
+comparison,market,subset,rows,brier_v31,brier_v3,diff_v31_minus_v3,ci_lo,ci_hi,bias_v31,bias_v3
+"2026 holdout, live info, calibrated",anytime_td,contested,1450,0.1549,0.1558,-0.0009,-0.0026,0.0007,-0.0055,-0.0191
+"2026 holdout, live info, calibrated",pass_yds,other,356,0.148,0.1507,-0.0028,-0.0055,0.0,0.0314,0.0252
+"2026 holdout, live info, calibrated",pass_yds,contested,634,0.2206,0.225,-0.0043,-0.0076,-0.0009,-0.0483,-0.0604
+"2026 holdout, live info, calibrated",rec_yds,other,4566,0.127,0.1297,-0.0027,-0.0048,-0.0006,-0.0141,-0.0367
+"2026 holdout, live info, calibrated",rec_yds,contested,1146,0.233,0.238,-0.005,-0.0116,0.0015,-0.0446,-0.0842
+"2026 holdout, live info, calibrated",receptions,other,4567,0.1054,0.1071,-0.0017,-0.0035,0.0001,-0.0158,-0.0363
+"2026 holdout, live info, calibrated",receptions,contested,1852,0.232,0.2378,-0.0057,-0.0103,-0.0006,-0.056,-0.0951
+"2026 holdout, live info, calibrated",rush_yds,other,1657,0.1225,0.13,-0.0074,-0.0144,-0.0007,-0.0215,-0.0471
+"2026 holdout, live info, calibrated",rush_yds,contested,607,0.2111,0.2216,-0.0105,-0.0206,-0.0014,0.015,-0.0179
+"2025, live info, calibrated",anytime_td,contested,4032,0.1588,0.1592,-0.0004,-0.0013,0.0005,-0.0052,-0.0159
+"2025, live info, calibrated",pass_yds,other,966,0.1528,0.1529,-0.0001,-0.0014,0.0013,0.0297,0.0316
+"2025, live info, calibrated",pass_yds,contested,1698,0.2193,0.222,-0.0027,-0.0044,-0.001,-0.0207,-0.0215
+"2025, live info, calibrated",rec_yds,other,12131,0.1224,0.1225,-0.0001,-0.0012,0.001,-0.0056,-0.0205
+"2025, live info, calibrated",rec_yds,contested,3262,0.2305,0.2313,-0.0008,-0.0033,0.002,-0.0253,-0.0488
+"2025, live info, calibrated",receptions,other,11734,0.0996,0.1,-0.0004,-0.0015,0.0007,-0.0037,-0.0207
+"2025, live info, calibrated",receptions,contested,5241,0.225,0.2278,-0.0028,-0.0052,-0.0004,-0.03,-0.0578
+"2025, live info, calibrated",rush_yds,other,4893,0.1293,0.1341,-0.0049,-0.0094,-0.0008,-0.0124,-0.0356
+"2025, live info, calibrated",rush_yds,contested,1731,0.2334,0.2349,-0.0015,-0.0059,0.0035,-0.0351,-0.0595
+"2026 holdout, oracle actives, raw",anytime_td,contested,1460,0.1552,0.1552,0.0,0.0,0.0,-0.0025,-0.0025
+"2026 holdout, oracle actives, raw",pass_yds,other,373,0.1482,0.1511,-0.0029,-0.0056,-0.0001,0.0488,0.0428
+"2026 holdout, oracle actives, raw",pass_yds,contested,647,0.2193,0.2225,-0.0032,-0.0064,0.0004,-0.0239,-0.0357
+"2026 holdout, oracle actives, raw",rec_yds,other,4566,0.13,0.1307,-0.0006,-0.0011,-0.0001,-0.0049,-0.0076
+"2026 holdout, oracle actives, raw",rec_yds,contested,1146,0.2343,0.2355,-0.0013,-0.0024,-0.0,-0.0182,-0.024
+"2026 holdout, oracle actives, raw",receptions,other,4567,0.1077,0.1077,0.0,0.0,0.0,0.0111,0.0111
+"2026 holdout, oracle actives, raw",receptions,contested,1852,0.2306,0.2306,0.0,0.0,0.0,0.0011,0.0011
+"2026 holdout, oracle actives, raw",rush_yds,other,1665,0.1217,0.1218,-0.0001,-0.0007,0.0005,0.0104,0.0157
+"2026 holdout, oracle actives, raw",rush_yds,contested,607,0.2159,0.2165,-0.0006,-0.002,0.0008,0.0703,0.077
+"2025, oracle actives, raw",anytime_td,contested,4081,0.1582,0.1582,0.0,0.0,0.0,-0.0072,-0.0072
+"2025, oracle actives, raw",pass_yds,other,1082,0.1583,0.1584,-0.0002,-0.0016,0.0012,0.0483,0.0494
+"2025, oracle actives, raw",pass_yds,contested,1750,0.2206,0.223,-0.0024,-0.0039,-0.0009,-0.0016,-0.0035
+"2025, oracle actives, raw",rec_yds,other,12131,0.1229,0.1231,-0.0003,-0.0005,-0.0001,-0.004,-0.0042
+"2025, oracle actives, raw",rec_yds,contested,3262,0.2322,0.2333,-0.0011,-0.0017,-0.0005,-0.0127,-0.0133
+"2025, oracle actives, raw",receptions,other,11734,0.1005,0.1005,0.0,0.0,0.0,0.0161,0.0161
+"2025, oracle actives, raw",receptions,contested,5241,0.2246,0.2246,0.0,0.0,0.0,0.0116,0.0116
+"2025, oracle actives, raw",rush_yds,other,4934,0.1291,0.1291,-0.0,-0.0003,0.0003,0.0119,0.0134
+"2025, oracle actives, raw",rush_yds,contested,1738,0.231,0.2313,-0.0003,-0.0009,0.0004,0.0032,0.0053

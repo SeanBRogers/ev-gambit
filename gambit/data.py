@@ -147,6 +147,46 @@ def load_injuries(season: int) -> pd.DataFrame:
     return df[["week", "team", "gsis_id", "full_name", "position", "report_status"]]
 
 
+# Weekly roster status codes that mean "cannot play this week". The weekly injury report
+# never lists players on injured reserve/PUP/NFI, suspended or exempt, so the report alone
+# leaves them in the simulated roster with their pre-injury share (e.g. KC's Tyquan Thornton,
+# IR since Week 4, still drew 3.4 targets in the Week 7 export).
+#   RES = reserve (IR, PUP, NFI, suspended), EXE = commissioner exempt, INA = game-day
+#   inactive (posted ~90 min pre-kickoff), CUT/RET = released/retired, TRD/TRT = traded.
+UNAVAILABLE_STATUS = {"RES", "EXE", "INA", "CUT", "RET", "TRD", "TRT"}
+
+
+def load_roster_status(season: int) -> pd.DataFrame:
+    """Weekly roster status per player (gsis id). Empty frame on failure."""
+    import nflreadpy as nfl
+
+    try:
+        df = _cached(f"roster_status_{season}", lambda: nfl.load_rosters_weekly([season]).select(
+            ["season", "week", "team", "gsis_id", "full_name", "status", "status_description_abbr"]
+        ).to_pandas(), max_age_hours=3)
+    except Exception:
+        return pd.DataFrame(columns=["season", "week", "team", "gsis_id", "full_name", "status"])
+    return df.dropna(subset=["gsis_id"])
+
+
+def unavailable_ids(roster_status: pd.DataFrame, week: int) -> dict:
+    """gsis_id -> status for players who cannot play in `week`.
+
+    Uses that week's roster snapshot; if it isn't published yet, the latest earlier week
+    (a player on IR last week is still on IR unless designated to return — the user can
+    add him back on the Slate tab).
+    """
+    rs = roster_status[roster_status["week"] <= week]
+    if rs.empty:
+        return {}
+    last_wk = rs.groupby("gsis_id")["week"].transform("max")
+    latest = rs[rs["week"] == last_wk]
+    # a traded player can have two rows that week (TRD on the old team, ACT on the new one)
+    active = set(latest.loc[latest["status"] == "ACT", "gsis_id"])
+    bad = latest[latest["status"].isin(UNAVAILABLE_STATUS) & ~latest["gsis_id"].isin(active)]
+    return dict(zip(bad["gsis_id"], bad["status"]))
+
+
 # ---------------------------------------------------------------------------
 # Derived tables
 # ---------------------------------------------------------------------------

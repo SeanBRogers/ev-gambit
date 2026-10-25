@@ -68,3 +68,44 @@ def test_bootstrap_sums_mean():
     s = _bootstrap_sums(rng, counts, None, None, league, 1.0)
     assert math.isclose(s.mean(), 15.0, rel_tol=0.02)
     assert _bootstrap_sums(rng, np.zeros(5, int), None, None, league, 1.0).sum() == 0
+
+
+def test_unavailable_ids_uses_latest_week_and_respects_trades():
+    import pandas as pd
+    from gambit.data import unavailable_ids
+    rs = pd.DataFrame([
+        # IR since week 4 and still IR in the latest published week -> out
+        dict(week=4, gsis_id="thornton", status="ACT"), dict(week=6, gsis_id="thornton", status="RES"),
+        # came off IR before the slate week -> available
+        dict(week=5, gsis_id="kirk", status="RES"), dict(week=7, gsis_id="kirk", status="ACT"),
+        # traded: two rows in the same week, ACT on the new team wins
+        dict(week=7, gsis_id="traded", status="TRD"), dict(week=7, gsis_id="traded", status="ACT"),
+        # practice squad is not an injury status
+        dict(week=7, gsis_id="ps", status="DEV"),
+        # a later week than the slate is ignored
+        dict(week=6, gsis_id="future", status="ACT"), dict(week=9, gsis_id="future", status="RES"),
+    ])
+    out = unavailable_ids(rs, 7)
+    assert set(out) == {"thornton"}
+    assert out["thornton"] == "RES"
+
+
+def test_league_draws_recency_weighting():
+    from gambit.model import _league_draws
+    rng = np.random.default_rng(3)
+    league = np.array([0.0, 10.0])
+    cdf = np.cumsum([1.0, 3.0]) / 4.0          # weight 3x on the second value
+    d = _league_draws(rng, league, 40000, cdf)
+    assert math.isclose(d.mean(), 7.5, rel_tol=0.02)
+    assert math.isclose(_league_draws(rng, league, 40000).mean(), 5.0, rel_tol=0.02)
+
+
+def test_efficiency_multiplier_direction():
+    """A team implied below its norm must get fewer yards per catch, never more."""
+    from gambit import model as M
+    st = M.State(cutoff=(2026, 7), params=M.Params())
+    st.eff_implied = {"catch": 0.01, "rush": 0.0}
+    st.team_implied_norm = {"KC": 24.6}
+    d = float(np.clip(19.75 - st.team_implied_norm["KC"], -st.params.eff_clip, st.params.eff_clip))
+    assert np.exp(st.eff_implied["catch"] * d) < 1.0
+    assert np.exp(st.eff_implied["rush"] * d) == 1.0

@@ -52,12 +52,13 @@ def load_all(season: int):
     snaps = D.load_snaps(seasons)
     sch = D.load_schedule([season])
     inj = D.load_injuries(season)
-    return pbp, pos, snaps, sch, inj
+    rstat = D.load_roster_status(season)
+    return pbp, pos, snaps, sch, inj, rstat
 
 
 @st.cache_resource(ttl=6 * 3600, show_spinner="Fitting model (≈10s)…")
 def get_state(season: int, week: int):
-    pbp, pos, snaps, _, _ = load_all(season)
+    pbp, pos, snaps, _, _, _ = load_all(season)
     return M.fit_state(pbp, pos, (season, week), snaps=snaps)
 
 
@@ -97,7 +98,7 @@ def summarize(stv: M.State, sims: dict, cal: dict, use_cal: bool) -> pd.DataFram
 # Sidebar
 # ---------------------------------------------------------------------------
 
-pbp, pos, snaps, sch, inj = load_all(SEASON)
+pbp, pos, snaps, sch, inj, rstat = load_all(SEASON)
 # each team's usual home venue = its most frequent stadium_id this season (neutral sites are rare)
 home_stadium = sch.groupby("home_team")["stadium_id"].agg(lambda x: x.value_counts().index[0]).to_dict()
 open_weeks = sorted(sch.loc[sch["result"].isna() & (sch["game_type"] == "REG"), "week"].unique())
@@ -162,6 +163,13 @@ with tab_slate:
                            help="Only wind enters the model: its effect on pass rate and yards/attempt is estimated from data.")
 
     wk_inj = inj[(inj["week"] == week) & inj["report_status"].isin(["Out", "Doubtful"])]
+    # Why each default OUT is out. The injury report never lists IR/PUP/NFI/suspended players,
+    # so roster status is required to drop them (v3 left them in with their old share).
+    out_reason = {pid: f"report: {s}" for pid, s in zip(wk_inj["gsis_id"], wk_inj["report_status"])}
+    STATUS_NAME = {"RES": "reserve/IR", "EXE": "exempt", "INA": "inactive", "CUT": "released",
+                   "RET": "retired", "TRD": "traded", "TRT": "traded"}
+    for pid, s in D.unavailable_ids(rstat, int(week)).items():
+        out_reason.setdefault(pid, f"roster: {STATUS_NAME.get(s, s)}")
     team_inputs = {}
     cols = st.columns(2)
     for col, team, home in [(cols[0], g["away_team"], False), (cols[1], g["home_team"], True)]:
@@ -170,9 +178,14 @@ with tab_slate:
             roster = stv.roster.get(team, [])
             label_of = {p: f"{stv.players.loc[p, 'name']} ({stv.players.loc[p, 'position']})" for p in roster}
             pid_of = {v: k for k, v in label_of.items()}
-            default_out = [label_of[p] for p in roster if p in set(wk_inj["gsis_id"])]
+            default_out = [label_of[p] for p in roster if p in out_reason]
             out_labels = st.multiselect("Out / inactive", list(label_of.values()), default=default_out,
-                                        key=f"out_{team}", help="Defaults to this week's Out/Doubtful report. Volume redistributes within the position group.")
+                                        key=f"out_{team}", help="Defaults to this week's Out/Doubtful report plus anyone on "
+                                        "IR/PUP/NFI, suspended, exempt or inactive per the weekly roster. Volume redistributes "
+                                        "within the position group.")
+            if default_out:
+                st.caption("Default outs: " + "; ".join(
+                    f"{stv.players.loc[p, 'name']} ({out_reason[p]})" for p in roster if p in out_reason))
             outs = [pid_of[x] for x in out_labels]
             P = stv.players
             returning = P[(P["team"] == team) & P["group"].isin(["QB", "RB", "WR", "TE"])
@@ -212,7 +225,8 @@ with tab_slate:
                 st.error(meta["error"])
                 continue
             st.markdown(f"**{team}** · plays ≈ {meta['plays_mu']:.0f} · pass share {meta['pass_share_mean']:.0%} · "
-                        f"expected TDs {meta['td_lambda']:.2f}")
+                        f"expected TDs {meta['td_lambda']:.2f} · implied {meta.get('implied_vs_norm', 0):+.1f} pts vs "
+                        f"team norm → yards/play ×{meta.get('eff_mult_rec', 1):.2f} rec, ×{meta.get('eff_mult_rush', 1):.2f} rush")
             df = summarize(stv, sims, cal, use_cal)
             st.dataframe(df.drop(columns=["_pid", "_touches"]), hide_index=True, width="stretch")
 
@@ -316,11 +330,13 @@ with tab_notes:
     st.markdown("""
 **How a price is made**
 1. Market spread/total → each team's implied points.
-2. Implied points + spread + team tendency (+ wind) → plays, pass share, expected TDs (all fitted).
+2. Implied points + spread + team tendency (+ wind) → plays, pass share, expected TDs (all fitted). Implied points
+   relative to the team's usual level also scale yards per carry and per catch (slope estimated within team-season).
 3. Each player's carry/target share: empirical-Bayes posterior with a role prior (RB1, WR2…), recency-weighted,
    plus estimated game-to-game volatility. OUT players' volume moves to his position group.
 4. Yards per play: bootstrap from the player's own plays mixed with the league pool; the mixing weight is estimated
-   (per-carry RB efficiency is mostly noise, so RBs lean heavily on the league pool).
+   (per-carry RB efficiency is mostly noise, so RBs lean heavily on the league pool). The league pool is
+   recency-weighted, so the current season's environment counts more than two seasons ago.
 5. TDs: simulated volume × the player's expected-TD rate per carry/target (goal-line role lives here), scaled so the
    team total matches the market.
 6. Per-market logistic calibration (fit on 2025, checked on 2026).
