@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
+from . import availability as A
 from . import data as D
 from . import model as M
 
@@ -59,7 +60,19 @@ def _old_prob(mean_pg, gp, thr, market, td_rate=None):
     return shrink(p, gp)
 
 
-def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | None = None):
+def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | None = None,
+        info: str = "oracle"):
+    """info = which players the simulation removes before kickoff:
+      oracle         -> anyone without an offensive snap in the target game (v3 default; optimistic)
+      report         -> that week's Out/Doubtful injury report only (what v3's app actually did live)
+      report+status  -> report plus weekly roster status as of kickoff (IR/PUP/NFI/suspended/exempt;
+                        the target week's game-day INA list is excluded: it is posted after the report)
+      report+status+avail -> as report+status, and every remaining non-QB plays in each sim with
+                        his fitted P(plays) (availability model fit on weeks before this one:
+                        Questionable/practice status, played the previous game, recent snap share);
+                        a player's own rows are graded on the sims in which he plays
+    Grading is identical in every mode: only players who actually played are graded.
+    """
     seasons = [season - 2, season - 1, season] if season >= 2026 else [season - 1, season]
     pbp = D.load_pbp(seasons, refresh_current=False)
     pos = D.load_positions(seasons)
@@ -69,6 +82,13 @@ def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | No
     stats["t"] = stats["season"] * 20 + stats["week"]
     inj = D.load_injuries(season)
     snaps = D.load_snaps(seasons)
+    rstat = D.load_roster_status(season) if info.startswith("report+status") else None
+    use_q = info == "report+status+avail"
+    if use_q:
+        inj_hist = D.load_injuries_hist(seasons)
+        posn = pos.set_index("player_id")["position"]
+        unav = A.pregame_unavailable({s: D.load_roster_status(s) for s in seasons}, D.unavailable_ids)
+        av_train = A.training_rows(inj_hist, snaps, posn, unav)
     rows = []
     for week in range(w0, w1 + 1):
         t0 = time.time()
@@ -78,14 +98,37 @@ def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | No
         hist = stats[stats["t"] < season * 20 + week]
         # Actives are public ~90 min before kickoff; proxy = had an offensive snap.
         played = set(snaps[(snaps["season"] == season) & (snaps["week"] == week)]["player_id"])
+        wk_out = set(inj.loc[(inj["week"] == week) & inj["report_status"].isin(["Out", "Doubtful"]), "gsis_id"])
+        if rstat is not None:
+            # pregame: the target week's INA rows are the game-day inactive list, not pre-kickoff info
+            wk_out |= set(D.unavailable_ids(rstat, week, pregame=True))
+        av = A.fit_before(av_train, (season, week)) if use_q else None
+        inj_w = inj[inj["week"] == week]
         for _, g in games.iterrows():
             outdoor = g["roof"] in ("outdoors", "open")
             wind = float(g["wind"]) if outdoor and pd.notna(g["wind"]) else 0.0
             for team, home in [(g["home_team"], True), (g["away_team"], False)]:
                 imp = D.implied_points(g["spread_line"], g["total_line"], home)
                 ts = g["spread_line"] if home else -g["spread_line"]
-                team_outs = tuple(p for p in st.roster.get(team, []) if p not in played)
-                sim = M.simulate_team(st, M.GameInputs(team, "", imp, ts, wind, team_outs),
+                if info == "oracle":
+                    team_outs = tuple(p for p in st.roster.get(team, []) if p not in played)
+                else:
+                    team_outs = [p for p in st.roster.get(team, []) if p in wk_out]
+                    # mirror the app: only the default starter (most weighted dropbacks) plays QB
+                    qbs = [p for p in st.roster.get(team, []) if p not in team_outs
+                           and st.players.loc[p, "group"] == "QB"]
+                    if qbs:
+                        starter = max(qbs, key=lambda p: st.players.loc[p, "n_db"])
+                        team_outs += [p for p in qbs if p != starter]
+                    team_outs = tuple(team_outs)
+                avail = {}
+                if av is not None:
+                    cand = [p for p in st.roster.get(team, []) if p not in team_outs
+                            and st.players.loc[p, "group"] != "QB"]
+                    if cand:
+                        f = A.week_frame(snaps, inj_w, team, season, week, players=cand)
+                        avail = dict(zip(f.index, av.prob(f)))
+                sim = M.simulate_team(st, M.GameInputs(team, "", imp, ts, wind, team_outs, avail=avail),
                                       n=n_sims, seed=week * 1000 + sum(map(ord, team)))
                 if "error" in sim.get("meta", {}):
                     continue
@@ -102,7 +145,8 @@ def run(season: int, w0: int, w1: int, n_sims: int = 4000, params: M.Params | No
                     last8 = h.tail(8)
                     cur = h[h["season"] == season]
                     base_src = cur if len(cur) else h[h["season"] == season - 1]
-                    d = dict(d)
+                    # graded rows are players who played: use his sims in which he plays
+                    d = {k: M.own_samples(d, k) for k in d if k not in ("played", "p_play")}
                     d["anytime_td"] = d["tds"]
                     last3 = h.tail(3)
                     pre = {c: float(last3[c].fillna(0).mean()) if len(last3) else 0.0
@@ -187,7 +231,11 @@ def reliability(df: pd.DataFrame, col: str = "p_model", bins: int = 10) -> pd.Da
 
 if __name__ == "__main__":
     season, w0, w1 = (int(x) for x in sys.argv[1:4])
-    res = run(season, w0, w1)
-    res.to_parquet(f"backtest_{season}_{w0}_{w1}.parquet", index=False)
+    info = sys.argv[4] if len(sys.argv) > 4 else "oracle"
+    if info not in ("oracle", "report", "report+status", "report+status+avail"):
+        raise SystemExit("info must be oracle | report | report+status | report+status+avail")
+    res = run(season, w0, w1, info=info)
+    suffix = "" if info == "oracle" else "_" + info.replace("+", "_")
+    res.to_parquet(f"backtest_{season}_{w0}_{w1}{suffix}.parquet", index=False)
     pd.set_option("display.width", 250)
     print(score(res).round(4).to_string(index=False))

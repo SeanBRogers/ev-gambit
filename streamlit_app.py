@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from gambit import availability as A
 from gambit import calibrate as C
 from gambit import data as D
 from gambit import model as M
@@ -52,13 +53,25 @@ def load_all(season: int):
     snaps = D.load_snaps(seasons)
     sch = D.load_schedule([season])
     inj = D.load_injuries(season)
-    return pbp, pos, snaps, sch, inj
+    rstat = D.load_roster_status(season)
+    inj_hist = D.load_injuries_hist(seasons)
+    return pbp, pos, snaps, sch, inj, rstat, inj_hist
 
 
 @st.cache_resource(ttl=6 * 3600, show_spinner="Fitting model (≈10s)…")
 def get_state(season: int, week: int):
-    pbp, pos, snaps, _, _ = load_all(season)
+    pbp, pos, snaps, _, _, _, _ = load_all(season)
     return M.fit_state(pbp, pos, (season, week), snaps=snaps)
+
+
+@st.cache_resource(ttl=6 * 3600, show_spinner="Fitting availability model (≈20s)…")
+def get_availability(season: int, week: int):
+    """P(plays) for players not ruled out: fit on every team-week before this one."""
+    _, pos, snaps, _, _, _, inj_hist = load_all(season)
+    seasons = [season - 2, season - 1, season]
+    unav = A.pregame_unavailable({s: D.load_roster_status(s) for s in seasons}, D.unavailable_ids)
+    train = A.training_rows(inj_hist, snaps, pos.set_index("player_id")["position"], unav)
+    return A.fit_before(train, (season, week))
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -71,6 +84,8 @@ def summarize(stv: M.State, sims: dict, cal: dict, use_cal: bool) -> pd.DataFram
     for pid, d in sims.items():
         if pid == "meta":
             continue
+        # a Questionable player's own line is conditional on him playing; P(plays) is shown beside it
+        d = {k: M.own_samples(d, k) for k in d if k not in ("played", "p_play")} | {"p_play": d.get("p_play", 1.0)}
         p_td = float(np.mean(d["tds"] >= 1))
         if use_cal:
             p_td = float(C.apply(p_td, "anytime_td", cal))
@@ -80,6 +95,7 @@ def summarize(stv: M.State, sims: dict, cal: dict, use_cal: bool) -> pd.DataFram
 
         rows.append({
             "Player": stv.players.loc[pid, "name"], "Pos": stv.players.loc[pid, "position"],
+            "P(plays)": f"{d['p_play']:.0%}" if d["p_play"] < 1 else "",
             "Carries": round(float(d["rush_att"].mean()), 1),
             "Rush yds med (p10–p90)": q(d["rush_yds"]),
             "Targets": round(float(d["targets"].mean()), 1),
@@ -87,7 +103,7 @@ def summarize(stv: M.State, sims: dict, cal: dict, use_cal: bool) -> pd.DataFram
             "Rec yds med (p10–p90)": q(d["rec_yds"]),
             "Pass yds med (p10–p90)": q(d["pass_yds"]) if "pass_yds" in d else "",
             "ATD %": round(100 * p_td, 1),
-            "_pid": pid, "_touches": float(d["rush_att"].mean() + d["targets"].mean()),
+            "_pid": pid, "_touches": d["p_play"] * float(d["rush_att"].mean() + d["targets"].mean()),
         })
     df = pd.DataFrame(rows).sort_values("_touches", ascending=False)
     return df
@@ -97,7 +113,7 @@ def summarize(stv: M.State, sims: dict, cal: dict, use_cal: bool) -> pd.DataFram
 # Sidebar
 # ---------------------------------------------------------------------------
 
-pbp, pos, snaps, sch, inj = load_all(SEASON)
+pbp, pos, snaps, sch, inj, rstat, inj_hist = load_all(SEASON)
 # each team's usual home venue = its most frequent stadium_id this season (neutral sites are rare)
 home_stadium = sch.groupby("home_team")["stadium_id"].agg(lambda x: x.value_counts().index[0]).to_dict()
 open_weeks = sorted(sch.loc[sch["result"].isna() & (sch["game_type"] == "REG"), "week"].unique())
@@ -162,6 +178,20 @@ with tab_slate:
                            help="Only wind enters the model: its effect on pass rate and yards/attempt is estimated from data.")
 
     wk_inj = inj[(inj["week"] == week) & inj["report_status"].isin(["Out", "Doubtful"])]
+    # Why each default OUT is out. The injury report never lists IR/PUP/NFI/suspended players,
+    # so roster status is required to drop them (v3 left them in with their old share).
+    out_reason = {pid: f"report: {s}" for pid, s in zip(wk_inj["gsis_id"], wk_inj["report_status"])}
+    STATUS_NAME = {"RES": "reserve/IR", "EXE": "exempt", "INA": "game-day inactive", "CUT": "released",
+                   "RET": "retired", "TRD": "traded", "TRT": "traded"}
+    for pid, s in D.unavailable_ids(rstat, int(week)).items():
+        out_reason.setdefault(pid, f"roster: {STATUS_NAME.get(s, s)}")
+    # Everyone not ruled out still might not play: Questionable players took a snap ~65% of the time and
+    # unlisted players who missed the team's previous game ~40% (2024-26, pre-kickoff information only).
+    av_model = get_availability(SEASON, int(week))
+    inj_w = inj[inj["week"] == week]
+    inactives_posted = st.checkbox("Inactives are posted: everyone not marked Out plays", value=False,
+                                   help="Before inactives (~90 min pre-kickoff) each player plays with his estimated "
+                                        "probability. Tick this once you have moved the inactives to Out.")
     team_inputs = {}
     cols = st.columns(2)
     for col, team, home in [(cols[0], g["away_team"], False), (cols[1], g["home_team"], True)]:
@@ -170,9 +200,14 @@ with tab_slate:
             roster = stv.roster.get(team, [])
             label_of = {p: f"{stv.players.loc[p, 'name']} ({stv.players.loc[p, 'position']})" for p in roster}
             pid_of = {v: k for k, v in label_of.items()}
-            default_out = [label_of[p] for p in roster if p in set(wk_inj["gsis_id"])]
+            default_out = [label_of[p] for p in roster if p in out_reason]
             out_labels = st.multiselect("Out / inactive", list(label_of.values()), default=default_out,
-                                        key=f"out_{team}", help="Defaults to this week's Out/Doubtful report. Volume redistributes within the position group.")
+                                        key=f"out_{team}", help="Defaults to this week's Out/Doubtful report plus anyone on "
+                                        "IR/PUP/NFI, suspended, exempt or inactive per the weekly roster. Volume redistributes "
+                                        "within the position group.")
+            if default_out:
+                st.caption("Default outs: " + "; ".join(
+                    f"{stv.players.loc[p, 'name']} ({out_reason[p]})" for p in roster if p in out_reason))
             outs = [pid_of[x] for x in out_labels]
             P = stv.players
             returning = P[(P["team"] == team) & P["group"].isin(["QB", "RB", "WR", "TE"])
@@ -195,10 +230,32 @@ with tab_slate:
             else:
                 qb = None
                 st.warning("No active QB on the recent roster — passing yards will not be priced.")
+            avail = {}
+            cand = [p for p in roster if p not in outs and stv.players.loc[p, "group"] != "QB"]
+            if cand and not inactives_posted:
+                f = A.week_frame(snaps, inj_w, team, SEASON, int(week), players=cand)
+                avail = dict(zip(f.index, av_model.prob(f)))
+                doubt = [p for p in cand if avail[p] < 0.9]
+                with st.expander(f"Availability: {len(doubt)} player(s) below 90% to play", expanded=bool(doubt)):
+                    st.caption("Each sim, a player plays or sits with this probability (from the injury report, "
+                               "practice status, whether he played the last game, and recent snap share); when he "
+                               "sits his volume goes to his position group. His own props are priced on the sims "
+                               "in which he plays.")
+                    for p in doubt:
+                        why = f.loc[p, "report_status"] if isinstance(f.loc[p, "report_status"], str) else "not listed"
+                        prac = A.PRACTICE.get(f.loc[p, "practice_status"], "n/a")
+                        prev = "played last game" if f.loc[p, "played_prev"] else "missed last game"
+                        avail[p] = st.slider(f"{label_of[p]} · {why} · practice {prac} · {prev} · "
+                                             f"snap share {f.loc[p, 'role']:.0%}", 0, 100,
+                                             int(round(100 * avail[p])), 5, key=f"q_{team}_{p}") / 100
+                    rest = [p for p in cand if p not in doubt]
+                    if rest:
+                        st.caption("≥90%: " + ", ".join(f"{stv.players.loc[p, 'name']} {avail[p]:.0%}" for p in rest))
             imp = D.implied_points(spread, total, home)
             st.caption(f"Implied points: {imp:.1f}")
             team_inputs[team] = M.GameInputs(team, "", imp, spread if home else -spread,
-                                             0.0 if roof in W.INDOOR else wind, tuple(outs), qb, tuple(adds))
+                                             0.0 if roof in W.INDOOR else wind, tuple(outs), qb, tuple(adds),
+                                             avail)
 
     if st.button("Simulate game", type="primary"):
         st.session_state["sim"] = {t: M.simulate_team(stv, gi, n=n_sims, seed=11 + i)
@@ -212,7 +269,8 @@ with tab_slate:
                 st.error(meta["error"])
                 continue
             st.markdown(f"**{team}** · plays ≈ {meta['plays_mu']:.0f} · pass share {meta['pass_share_mean']:.0%} · "
-                        f"expected TDs {meta['td_lambda']:.2f}")
+                        f"expected TDs {meta['td_lambda']:.2f} · implied {meta.get('implied_vs_norm', 0):+.1f} pts vs "
+                        f"team norm → yards/play ×{meta.get('eff_mult_rec', 1):.2f} rec, ×{meta.get('eff_mult_rush', 1):.2f} rush")
             df = summarize(stv, sims, cal, use_cal)
             st.dataframe(df.drop(columns=["_pid", "_touches"]), hide_index=True, width="stretch")
 
@@ -230,7 +288,18 @@ with tab_price:
         pick = options[st.selectbox("Player", list(options))]
         market = st.selectbox("Market", list(MARKETS))
         key, cal_key = MARKETS[market]
-        samples = sims_all[pick[0]][pick[1]].get(key)
+        d_pick = sims_all[pick[0]][pick[1]]
+        p_play = float(d_pick.get("p_play", 1.0))
+        samples = M.own_samples(d_pick, key)
+        settle_no = False
+        if p_play < 1:
+            st.warning(f"Modeled P(plays) = {p_play:.0%} (Slate tab → Availability). Prices below are conditional "
+                       "on him playing.")
+            settle_no = st.radio("If he does not play, this contract…",
+                                 ["voids / is refunded (price conditional on playing)",
+                                  "resolves NO (YES needs him to play AND clear)"], index=0,
+                                 help="Check DK's contract rules. Not verified here. The safest course is to wait "
+                                      "for inactives.").startswith("resolves")
         if samples is None:
             st.warning("No samples for that market (passing yards exist only for the starting QB).")
         else:
@@ -243,6 +312,8 @@ with tab_price:
             p_raw = PR.prob_at_least(samples, thr)
             p = float(C.apply(p_raw, cal_key, cal)) if use_cal else p_raw
             se = PR.mc_se(p_raw, len(samples))
+            if settle_no:
+                p *= p_play
             margin = margin_c / 100
             yes_max, no_max = PR.max_buy_price(p, margin), PR.max_buy_price(1 - p, margin)
 
@@ -276,7 +347,7 @@ with tab_price:
                 st.session_state.setdefault("ledger", []).append(dict(
                     logged_at=dt.datetime.now().isoformat(timespec="seconds"), game=st.session_state.get("sim_label"),
                     player=stv.players.loc[pick[1], "name"], market=market, threshold=thr,
-                    p_model=round(p, 4), yes_price=yes_px, no_price=no_px, ev_yes_c=round(ev_yes * 100, 2),
+                    p_model=round(p, 4), p_plays=round(p_play, 3), yes_price=yes_px, no_price=no_px, ev_yes_c=round(ev_yes * 100, 2),
                     ev_no_c=round(ev_no * 100, 2), side="", entry_price="", closing_price="", result=""))
                 st.toast("Logged")
 
@@ -316,11 +387,16 @@ with tab_notes:
     st.markdown("""
 **How a price is made**
 1. Market spread/total → each team's implied points.
-2. Implied points + spread + team tendency (+ wind) → plays, pass share, expected TDs (all fitted).
+2. Implied points + spread + team tendency (+ wind) → plays, pass share, expected TDs (all fitted). Implied points
+   relative to the team's usual level also scale yards per carry and per catch (slope estimated within team-season).
 3. Each player's carry/target share: empirical-Bayes posterior with a role prior (RB1, WR2…), recency-weighted,
-   plus estimated game-to-game volatility. OUT players' volume moves to his position group.
+   plus estimated game-to-game volatility. OUT players' volume moves to his position group. Before inactives,
+   every other player plays in each sim with a fitted probability (injury report, practice status, whether he
+   played the last game, recent snap share); in sims where he sits, his volume moves to his group. His own props
+   are priced on the sims in which he plays.
 4. Yards per play: bootstrap from the player's own plays mixed with the league pool; the mixing weight is estimated
-   (per-carry RB efficiency is mostly noise, so RBs lean heavily on the league pool).
+   (per-carry RB efficiency is mostly noise, so RBs lean heavily on the league pool). The league pool is
+   recency-weighted, so the current season's environment counts more than two seasons ago.
 5. TDs: simulated volume × the player's expected-TD rate per carry/target (goal-line role lives here), scaled so the
    team total matches the market.
 6. Per-market logistic calibration (fit on 2025, checked on 2026).
